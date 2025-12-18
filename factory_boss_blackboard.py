@@ -21,6 +21,7 @@ class FactoryBlackboard:
             "architecture": {
                 "modules": []
             },
+            "api_registry": {}, # Stores method signatures and validation rules
             "modules": {},
             "files_created": [],
             "logs": []
@@ -72,12 +73,21 @@ class FactoryBlackboard:
             raise KeyError(f"Module not registered: {name}")
         self.state["modules"][name]["spec"] = spec
         self.save()
+        
+    def register_api(self, module_name, api_spec):
+        """
+        Registers the public API contract for a module.
+        api_spec should be a dict of function/method names and their signatures/rules.
+        """
+        self.state["api_registry"][module_name] = api_spec
+        self.save()
 
     # ---------- AGENT CONTEXT ----------
     def snapshot(self):
         """Bezpieczny kontekst dla agentów"""
         return json.dumps({
             "architecture": self.state["architecture"],
+            "api_registry": self.state["api_registry"],
             "modules": self.state["modules"],
             "files_created": self.state["files_created"]
         }, indent=2)
