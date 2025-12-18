@@ -8,7 +8,8 @@ RULES:
 1. Import the classes/functions from the generated files.
 2. Create the main execution loop or entry point.
 3. Ensure that data flows correctly from UI to Logic to Database, according to the Blueprint.
-4. Output ONLY the Python code. No explanations.
+4. If this is a Web App, initialize the Flask/FastAPI app, register routes, and start the server (e.g., app.run()).
+5. Output ONLY the Python code. No explanations.
 """
 
 def run_integrator(blueprint, modules_code):
