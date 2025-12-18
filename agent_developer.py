@@ -5,10 +5,11 @@ You are a SENIOR PYTHON DEVELOPER (Level 4).
 Your task is to implement a Python module based EXACTLY on the provided TECHNICAL SPECIFICATION.
 
 RULES:
-1. Use only standard Python libraries unless specified otherwise.
+1. Use only standard Python libraries unless specified otherwise (Flask/FastAPI are allowed if needed).
 2. Ensure the code is clean, commented, and handles basic errors (try-except).
 3. Output ONLY the Python code. No explanations.
 4. Your code must match the function names and parameters from the specification.
+5. If this is a Web/UI module, you may embed HTML strings directly in the Python code or use `render_template_string` from Flask.
 """
 
 def run_developer(specification):
