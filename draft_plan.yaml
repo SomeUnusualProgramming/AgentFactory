@@ -1,0 +1,22 @@
+project_info:
+  name: "Expense Tracker App"
+  description: "A desktop application for users to track their expenses by saving receipts in a local text file."
+
+glossary:
+  User: "Unique ID string (UUID4)"
+  Receipt: "Text file containing expense details"
+  ExpenseItem: "Dictionary containing {category, date, amount}"
+  
+modules:
+  - name: "database_handler"
+    responsibility: "Saves receipt files to local directory"
+    inputs: ["receipt_text"]
+    outputs: ["boolean_success"]
+  - name: "core_logic"
+    responsibility: "Processes user input and generates expense items"
+    inputs: ["raw_string"]
+    outputs: ["expense_items_list"]
+  - name: "ui_handler"
+    responsibility: "Handles user interface interactions, such as saving receipts"
+    inputs: ["user_input"]
+    outputs: ["processed_data_dict"]
