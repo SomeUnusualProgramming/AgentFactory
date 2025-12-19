@@ -7,6 +7,13 @@ import subprocess
 import sys
 import re
 from factory_boss_blackboard import FactoryBlackboard
+from agent_code_reviewer import run_reviewer
+from agent_code_optimizer import run_optimizer
+from agent_frontend_developer import run_frontend_developer, extract_frontend_files
+from prompt_library import (
+    FACTORY_BOSS_L1_PROMPT, FACTORY_BOSS_L2_PROMPT, FACTORY_BOSS_L3_PROMPT,
+    FACTORY_BOSS_L5_PROMPT, AUTO_DEBUGGER_PROMPT, get_factory_boss_l4_prompt
+)
 
 MODEL = 'llama3.1'
 MAX_RETRIES = 3
@@ -69,6 +76,14 @@ def super_clean(text, format_type="python"):
     if blocks:
         text = "\n".join(blocks)
     else:
+        # Fallback: if no blocks, try to clean based on known junk
+        # But first, check if it looks like code at all
+        if format_type == "python":
+            # If it starts with conversational text and has no code structure, reject it
+            if not any(k in text for k in ['def ', 'import ', 'class ', 'print(', 'if ']):
+                 # It might be pure garbage text
+                 pass
+        
         text = text.replace('```python', '').replace('```yaml', '').replace('```', '')
 
     if format_type == "yaml":
@@ -83,7 +98,8 @@ def super_clean(text, format_type="python"):
     cleaned = []
     junk_prefixes = (
         "here is", "sure", "note:", "this script", "i have",
-        "however", "please", "the following", "i've added", "corrected version"
+        "however", "please", "the following", "i've added", "corrected version",
+        "na podstawie", "w oparciu", "poniżej" # Add Polish/common conversational prefixes
     )
     for line in lines:
         stripped = line.lower().strip()
@@ -92,16 +108,52 @@ def super_clean(text, format_type="python"):
         cleaned.append(line)
     return '\n'.join(cleaned).strip()
 
-def ask_agent(role, system, message, format_type="python"):
-    print(f"[{role}] 🧠 Thinking...")
+def ask_agent(role, system, message, format_type="python", blackboard=None, agent_name=None, module_name=None):
+    print(f"[{role}] 🧠 Thinking...", end='', flush=True)
+    full_response = ""
     try:
-        res = ollama.chat(model=MODEL, messages=[
+        stream = ollama.chat(model=MODEL, messages=[
             {'role': 'system', 'content': system},
             {'role': 'user', 'content': message}
-        ])
-        return super_clean(res['message']['content'], format_type)
+        ], stream=True)
+        
+        for chunk in stream:
+            content = chunk['message']['content']
+            full_response += content
+            print(".", end='', flush=True)
+            
+        print(" Done!")
+        cleaned_response = super_clean(full_response, format_type)
+        
+        if blackboard and agent_name and module_name:
+            try:
+                blackboard.log_agent_attempt(
+                    agent=agent_name,
+                    module=module_name,
+                    attempt_num=1,
+                    input_data=message,
+                    output=cleaned_response,
+                    status="success"
+                )
+            except Exception as log_e:
+                print(f"⚠️ Failed to log agent attempt: {log_e}")
+        
+        return cleaned_response
     except Exception as e:
-        print(f"❌ Błąd Ollama: {e}")
+        print(f"\n❌ Error: {e}")
+        if blackboard and agent_name and module_name:
+            try:
+                blackboard.log_agent_attempt(
+                    agent=agent_name,
+                    module=module_name,
+                    attempt_num=1,
+                    input_data=message,
+                    output="",
+                    status="failure",
+                    error=str(e)
+                )
+            except:
+                pass
         return ""
 
 def manage_dependencies(project_dir):
@@ -123,13 +175,34 @@ def manage_dependencies(project_dir):
         'os', 'sys', 're', 'time', 'json', 'yaml', 'math', 'subprocess',
         'datetime', 'random', 'collections', 'sqlite3', 'typing',
         'smtplib', 'email', 'hashlib', 'logging', 'threading', 'abc',
-        'functools'
+        'functools', 'secrets', 'io', 'shutil', 'pathlib', 'glob',
+        'unittest', 'argparse', 'inspect', 'importlib', 'pkgutil',
+        'traceback', 'platform', 'uuid', 'calendar', 'copy', 'dataclasses',
+        'enum', 'ipaddress', 'itertools', 'socket', 'struct', 'tempfile',
+        'textwrap', 'urllib', 'warnings', 'weakref', 'zipfile', 'concurrent',
+        'contextlib', 'csv', 'decimal', 'statistics', 'string', 'tarfile',
+        'xml', 'html', 'http', 'ftplib', 'gzip', 'bz2', 'lzma', 'mmap',
+        'pickle', 'queue', 'selectors', 'signal', 'ssl', 'termios', 'tty',
+        'venv', 'webbrowser', 'wsgiref', 'xmlrpc', 'zoneinfo'
     ]
     
-    # Filter out standard libs and local modules
-    to_install = [lib for lib in found_imports if lib not in std_lib and lib not in local_modules and lib != 'ollama']
+    internal_service_patterns = ['_service', '_handler', '_manager', '_controller', '_factory']
+    
+    def is_internal_module(lib):
+        return any(lib.endswith(pattern) for pattern in internal_service_patterns) or \
+               '_' in lib and lib.split('_')[0] in local_modules
+    
+    fake_modules = ['your_database_module', 'your_api_module', 'email_validator', 'safe_dump', 
+                    'validate_email', 'jsonschema', 'placeholder', 'mock_module', 'sample_module']
+    
+    to_install = [lib for lib in found_imports 
+                  if lib not in std_lib 
+                  and lib not in local_modules 
+                  and lib != 'ollama' 
+                  and lib != 'api_registry'
+                  and lib not in fake_modules
+                  and not is_internal_module(lib)]
 
-    # Explicitly check for implicit dependencies (FastAPI extras)
     if "fastapi" in to_install or "fastapi" in found_imports:
         if "python-multipart" not in to_install:
             to_install.append("python-multipart")
@@ -146,165 +219,330 @@ def manage_dependencies(project_dir):
             print(f"⚠️ Error during pip install: {e}")
 
 # ---------- WORKFLOW ----------
-def run_factory(idea):
+def run_factory(idea, debug_mode=False):
+    overall_start_time = time.time()
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     project_dir = f"output/project_{timestamp}"
     os.makedirs(project_dir, exist_ok=True)
     print(f"🚀 WORKSPACE CREATED: {project_dir}")
 
     bb = FactoryBlackboard(idea, project_dir)
+    phase_times = {}
 
-    # PHASE 1: L1 ANALYST
+    # PHASE 1 & 2: L1 ANALYST & L2 AUDITOR LOOP
+    phase1_start = time.time()
     print("\n======================================================================")
-    print("PHASE 1: L1 ANALYST – STRATEGIC PLANNING")
+    print("PHASE 1 & 2: L1 ANALYST & L2 AUDITOR – STRATEGIC PLANNING")
     print("======================================================================")
-    l1_sys = """You are a CTO and Systems Architect. 
-Your goal is to design a robust, modular Python Web Application.
-Prefer using Flask or FastAPI.
-The architecture MUST include:
-1. A clear separation of concerns (Routes, Logic, Data).
-2. A 'web_interface' module that handles HTTP routes and rendering.
-3. Service modules for core logic.
-Output ONLY valid YAML. 
-Do NOT use Markdown code blocks.
-Do NOT include any introductory text.
-Start the output immediately with the "modules" key.
-IMPORTANT: Any strings containing placeholders like {{ VARIABLE }} MUST be enclosed in double quotes.
+    
+    l1_sys = FACTORY_BOSS_L1_PROMPT
+    l2_sys = FACTORY_BOSS_L2_PROMPT
 
-Example format:
-modules:
-  - name: WebInterface
-    responsibility: "Handles HTTP routes and HTML rendering using Flask. API Key: {{ API_KEY }}"
-  - name: CoreLogic
-    responsibility: Business logic.
-"""
-    blueprint_raw = ask_agent("L1_ANALYST", l1_sys, f"App idea: {idea}", "yaml")
-    try:
-        blueprint = yaml.safe_load(blueprint_raw)
-        bb.set_architecture(blueprint)
-        print("📐 Blueprint accepted:")
-        print(json.dumps(blueprint, indent=2))
-    except Exception as e:
-        print(f"❌ Błąd YAML: {e}")
+    blueprint = None
+    max_planning_retries = 3
+    
+    for i in range(max_planning_retries):
+        print(f"\n--- Planning Iteration {i+1} ---")
+        
+        # L1: Generate
+        if i == 0:
+            prompt = f"App idea: {idea}"
+        else:
+            prompt = f"Previous plan was rejected. Improve it based on this feedback:\n{audit_feedback}\n\nOriginal Idea: {idea}"
+            
+        blueprint_raw = ask_agent("L1_ANALYST", l1_sys, prompt, "yaml")
+        
+        # Try to parse
+        try:
+            temp_blueprint = yaml.safe_load(blueprint_raw)
+             # --- HEALING LOGIC ---
+            if isinstance(temp_blueprint, dict) and "modules" in temp_blueprint:
+                if isinstance(temp_blueprint["modules"], dict):
+                    print("⚠️ Detected 'modules' as dict. converting to list...")
+                    new_modules = []
+                    for key, val in temp_blueprint["modules"].items():
+                         if isinstance(val, dict):
+                             if "name" not in val:
+                                 val["name"] = key
+                             new_modules.append(val)
+                    temp_blueprint["modules"] = new_modules
+            # ---------------------
+        except Exception as e:
+            print(f"❌ YAML Parsing Failed: {e}")
+            audit_feedback = f"YAML Syntax Error: {e}"
+            continue
+
+        # L2: Audit
+        audit_raw = ask_agent("L2_AUDITOR", l2_sys, f"Review this blueprint:\n{json.dumps(temp_blueprint, indent=2)}")
+        
+        if "VERDICT: PASSED" in audit_raw:
+            print("✅ Auditor approved the plan.")
+            blueprint = temp_blueprint
+            break
+        else:
+            print(f"⚠️ Auditor rejected the plan. Reason:\n{audit_raw}")
+            audit_feedback = audit_raw
+
+    if not blueprint:
+        print("❌ Failed to generate a valid plan after retries. Exiting.")
         return
 
+    phase1_duration = time.time() - phase1_start
+    phase_times["Planning (L1+L2)"] = phase1_duration
+    
+    bb.set_architecture(blueprint)
+    print(f"📐 Blueprint accepted and saved. (⏱️ {phase1_duration:.1f}s)")
+    print(json.dumps(blueprint, indent=2))
+
     # PHASE 2 & 3: L3 ARCHITECT & L4 DEVELOPER
+    phase2_start = time.time()
+    print("\n======================================================================")
+    print("PHASE 3: L3 ARCHITECT & L4 DEVELOPER – IMPLEMENTATION")
+    print("======================================================================")
     for module in blueprint['modules']:
         m_name = module['name'].lower().replace(" ", "_")
         filename = f"{m_name}.py"
+        module_type = module.get('module_type', 'service')
+        
         # L3: API spec
-        l3_sys = """You are a Senior Architect. 
-Define strictly the API (functions/params) for this module.
-If this is a Web/UI module, define the Flask/FastAPI routes and the HTML templates (conceptually).
-If this is a Logic module, define the functions and return types.
-
-IMPORTANT:
-1. Output MUST be valid YAML only.
-2. DO NOT write any Python code, imports, or implementation details.
-3. DO NOT use markdown code blocks like ```python.
-4. Structure the output as follows:
-api_spec:
-  [function_name]:
-    signature: "[name]([params]) -> [return_type]"
-    description: "[description]"
-    validation_rules:
-      - "[rule 1]"
-      - "[rule 2]"
-
-Example:
-api_spec:
-  calculate_tax:
-    signature: "calculate_tax(amount: float, rate: float) -> float"
-    description: "Calculates tax based on rate."
-    validation_rules:
-      - "amount must be non-negative"
-      - "rate must be between 0 and 1"
-"""
-        spec_raw = ask_agent(f"L3_{m_name}", l3_sys, f"Module: {module}", "yaml")
+        l3_sys = FACTORY_BOSS_L3_PROMPT
+        l3_context = f"MODULE_TYPE: {module_type}\n\nModule Details:\n{yaml.dump(module)}"
+        spec_raw = ask_agent(f"L3_{m_name}", l3_sys, l3_context, "yaml")
         
         # Parse L3 output to register API in Blackboard
+        extracted_type = None
         try:
             l3_data = yaml.safe_load(spec_raw)
-            if isinstance(l3_data, dict) and "api_spec" in l3_data:
-                bb.register_api(m_name, l3_data["api_spec"])
-                print(f"📝 Registered API contract for {m_name}")
+            if isinstance(l3_data, dict):
+                # Extract module_type if present, fallback to what we passed in
+                extracted_type = l3_data.get("module_type", module_type)
+                
+                if "api_spec" in l3_data:
+                    bb.register_api(m_name, l3_data["api_spec"])
+                    print(f"📝 Registered API contract for {m_name}")
+                else:
+                    # Fallback if model didn't follow YAML strict structure perfectly
+                    bb.register_api(m_name, {"raw_spec": spec_raw})
             else:
                 # Fallback if model didn't follow YAML strict structure perfectly
                 bb.register_api(m_name, {"raw_spec": spec_raw})
         except Exception as e:
             print(f"⚠️ Failed to parse API spec for {m_name}: {e}")
             bb.register_api(m_name, {"raw_spec": spec_raw})
+            extracted_type = module_type
 
-        bb.register_module(m_name, filename, spec_raw)
+        # Use extracted type (from architect) or fallback to input type
+        final_module_type = extracted_type if extracted_type else module_type
+        bb.register_module(m_name, filename, spec_raw, final_module_type)
 
         # L4: Developer
-        l4_sys = f"""Senior Python Developer. 
-Write ONLY Python code for {filename}.
-Follow the specification exactly.
-If this is a Web/UI module:
-- Use Flask or FastAPI as implied by the spec.
-- You MAY embed HTML in the Python file using multi-line strings (e.g., render_template_string).
-- Ensure the code is self-contained and runnable.
+        l4_sys = get_factory_boss_l4_prompt(filename)
+        l4_context = f"FILENAME: {filename}\nMODULE_TYPE: {final_module_type}\n\nSPECIFICATION:\n{spec_raw}"
+        
+        # RETRY LOOP FOR L4 GENERATION
+        code = ""
+        l4_success = False
+        l4_attempts = 0
+        l4_max_retries = 3
+        
+        while l4_attempts < l4_max_retries and not l4_success:
+            l4_attempts += 1
+            if l4_attempts > 1:
+                print(f"⚠️ L4 Validation failed. Retrying ({l4_attempts}/{l4_max_retries})...")
+                # Add "Previous Attempt Failed" context if retrying
+                l4_context += f"\n\nIMPORTANT: Your previous attempt failed validation. ENSURE you include the root route @app.route('/') and render_template!"
+            
+            code = ask_agent(f"L4_{m_name}", l4_sys, l4_context, blackboard=bb, agent_name="developer", module_name=m_name)
+        
+            # ---------- L4 OUTPUT VALIDATION (WEB UI CONTRACT) ----------
+            if final_module_type == "web_interface":
+                validation_error = None
+                if "render_template" not in code:
+                    validation_error = f"{filename} does not render HTML (render_template missing)"
+                
+                # Regex check for root route to handle spaces: @app.route( ' / ' )
+                if not re.search(r"@app\.route\(\s*['\"]/['\"]\s*\)", code):
+                    validation_error = f"{filename} missing root '/' route"
+                
+                if validation_error:
+                    print(f"❌ L4 Validation Error: {validation_error}")
+                    if l4_attempts >= l4_max_retries:
+                         raise RuntimeError(f"L4 validation failed after {l4_max_retries} attempts: {validation_error}")
+                else:
+                    l4_success = True
+            else:
+                l4_success = True
+        # -----------------------------------------------------------
 
-STRICT CONTRACT ENFORCEMENT:
-- Implement ONLY the functions defined in the API Spec.
-- Include comments explaining the validation rules.
-"""
-        code = ask_agent(f"L4_{m_name}", l4_sys, spec_raw)
+        # PHASE 3.5: L4.5 CODE REVIEWER
+        print(f"\n📋 [L4.5_REVIEWER] Reviewing {filename}...")
+        try:
+            review_report = run_reviewer(code)
+            quality_score = review_report.get("quality_score", 0)
+            issues_list = review_report.get("issues", [])
+            issues_count = len(issues_list)
+            print(f"   Quality Score: {quality_score}/100, Issues Found: {issues_count}")
+            if issues_list:
+                print("   Issues identified:")
+                for i, issue in enumerate(issues_list[:5], 1):
+                    print(f"     {i}. {issue}")
+            
+            # PHASE 3.75: L4.75 CODE OPTIMIZER
+            if quality_score < 85 or issues_count > 3:
+                print(f"📝 [L4.75_OPTIMIZER] Optimizing {filename}...")
+                optimized_code = run_optimizer(code, review_report)
+                code = optimized_code
+                optimizations_count = len(review_report.get("issues", []))
+                print(f"   Applied {optimizations_count} optimizations")
+                
+                bb.log_quality_metrics(m_name, quality_score, issues_count, optimizations_count, review_report)
+            else:
+                print(f"   Code quality acceptable, skipping optimization")
+                bb.log_quality_metrics(m_name, quality_score, issues_count, 0, review_report)
+        except Exception as e:
+            print(f"⚠️ Code review/optimization failed: {e}")
+        
         file_path = os.path.join(project_dir, filename)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(code)
 
+        # PHASE 3.9: Frontend Generation for Web Modules
+        is_web_module = any(
+            keyword in m_name.lower() 
+            for keyword in ["web", "interface", "ui", "frontend", "view"]
+        )
+        if is_web_module:
+            print(f"\n🎨 [L4.5_FRONTEND_DEVELOPER] Generating UI for {m_name}...")
+            try:
+                # Generate frontend files
+                frontend_code = run_frontend_developer(
+                    idea, 
+                    spec_raw,
+                    blackboard=bb
+                )
+                
+                # Extract HTML, CSS, JS files
+                frontend_files = extract_frontend_files(frontend_code)
+                
+                if frontend_files:
+                    # Create templates and static directories
+                    templates_dir = os.path.join(project_dir, "templates")
+                    static_dir = os.path.join(project_dir, "static")
+                    os.makedirs(templates_dir, exist_ok=True)
+                    os.makedirs(static_dir, exist_ok=True)
+                    
+                    # Save files with appropriate structure
+                    for fname, content in frontend_files.items():
+                        if fname.endswith('.html'):
+                            target_path = os.path.join(templates_dir, fname)
+                        elif fname.endswith('.css'):
+                            target_path = os.path.join(static_dir, fname)
+                        elif fname.endswith('.js'):
+                            target_path = os.path.join(static_dir, fname)
+                        else:
+                            target_path = os.path.join(project_dir, fname)
+                        
+                        os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                        with open(target_path, "w", encoding="utf-8") as f:
+                            f.write(content)
+                        print(f"   ✅ Created {target_path}")
+                    
+                    # Update blackboard to track frontend files
+                    bb.state.setdefault("frontend_files", []).extend(frontend_files.keys())
+                else:
+                    print(f"   ⚠️ No frontend files extracted")
+            except Exception as e:
+                print(f"   ⚠️ Frontend generation failed: {e}")
+
+    phase2_duration = time.time() - phase2_start
+    phase_times["Development (L3+L4)"] = phase2_duration
+    print(f"✅ Development complete. (⏱️ {phase2_duration:.1f}s)")
+    
     # PHASE 4: L5 INTEGRATOR
+    phase3_start = time.time()
     print("\n======================================================================")
     print("PHASE 4: L5 INTEGRATOR – ASSEMBLY")
     print("======================================================================")
     files_list = bb.state["files_created"]
     print(f"📦 Files: {files_list}")
-    l5_sys = """You are a Lead Integrator. 
-Write main.py to run the application.
-If the application is a Web App (Flask/FastAPI), ensure:
-1. The web server is started (e.g., app.run(debug=True, port=5000)).
-2. All routes are registered.
-Use exact filenames for imports.
-Output ONLY the Python code.
-Do NOT include any Markdown, explanations, or route lists outside of comments.
-Do NOT include any introductory text.
+    
+    # Provide explicit module type mapping to integrator
+    modules_info = "Module Types:\n"
+    for mod_name, mod_data in bb.state["modules"].items():
+        mod_type = mod_data.get("module_type", "unknown")
+        filename = mod_data.get("filename", f"{mod_name}.py")
+        modules_info += f"  - {filename}: module_type = {mod_type}\n"
+    
+    l5_sys = FACTORY_BOSS_L5_PROMPT
+    integrator_input = f"Blackboard snapshot:\n{bb.snapshot()}\n\n{modules_info}\n\nIdea: {idea}"
+    
+    l5_attempts = 0
+    l5_max_retries = 3
+    l5_success = False
+    main_code = ""
 
-IMPORTANT: Check the "api_registry" in the Blackboard snapshot.
-Only import and use functions/classes that are explicitly defined in the API Registry.
-"""
-    main_code = ask_agent("L5_INTEGRATOR", l5_sys, f"Blackboard snapshot:\n{bb.snapshot()}\nIdea: {idea}")
+    while l5_attempts < l5_max_retries and not l5_success:
+        l5_attempts += 1
+        if l5_attempts > 1:
+             print(f"⚠️ L5 Generation failed validation. Retrying ({l5_attempts}/{l5_max_retries})...")
+             integrator_input += "\n\nIMPORTANT: Your previous output was rejected. You MUST output ONLY valid Python code. Do not summarize or explain."
+
+        main_code = ask_agent("L5_INTEGRATOR", l5_sys, integrator_input)
+        
+        # Validate main.py quality
+        validation_error = None
+        main_code_stripped = main_code.strip()
+        
+        # 1. Check for empty code
+        if len(main_code_stripped) < 50:
+            validation_error = "main.py is too short (likely utility-only)"
+        
+        # 2. Check for missing entry point
+        elif "if __name__" not in main_code and "app.run" not in main_code and "from" not in main_code.split('\n')[0:5]:
+             validation_error = "main.py may not have proper entry point or imports"
+
+        # 3. Check for obvious conversational text
+        elif main_code_stripped.startswith("The system") or \
+             "consists of" in main_code_stripped[:200] or \
+             "Here is the" in main_code_stripped[:100]:
+             validation_error = "main.py contains textual description instead of code"
+        
+        # 4. Check if it's NOT python code (heuristics)
+        elif not any(keyword in main_code for keyword in ["import ", "from ", "def ", "class ", "if __name__"]):
+             validation_error = "main.py does not appear to be valid Python code"
+        
+        # 5. Check for utility function confusion
+        elif "def format_" in main_code or "def validate_" in main_code or "def log_" in main_code:
+            # Only flag this if it doesn't ALSO have the entry point
+            if "if __name__" not in main_code:
+                validation_error = "main.py contains utility functions instead of entry point"
+        
+        if validation_error:
+             print(f"❌ L5 Validation Error: {validation_error}")
+             if l5_attempts >= l5_max_retries:
+                  print("⚠️ L5 failed after max retries. Saving last attempt anyway.")
+                  l5_success = True 
+        else:
+             l5_success = True
+
     main_path = os.path.join(project_dir, "main.py")
     with open(main_path, "w", encoding="utf-8") as f:
         f.write(main_code)
 
+    phase3_duration = time.time() - phase3_start
+    phase_times["Integration (L5)"] = phase3_duration
+    print(f"✅ Integration complete. (⏱️ {phase3_duration:.1f}s)")
+    
     # DEPENDENCIES
     manage_dependencies(project_dir)
 
     # PHASE 5: AUTO-DEBUG LOOP
+    phase4_start = time.time()
     print("\n======================================================================")
     print("PHASE 5: L6 AUTO-DEBUG LOOP")
     print("======================================================================")
-    l6_sys = """You are a Maintenance Engineer. 
-Your goal is to fix the Python code based on the provided Traceback and Project Files.
-
-RULES:
-1. Analyze the Traceback to find the root cause (e.g., ImportError, IndentationError, NameError).
-2. Look at the "PROJECT FILES" to see the context of the error.
-3. If the error is an ImportError, check if the module name matches the filename or if the class/function exists.
-4. If the error is an IndentationError, fix the indentation of the specific block.
-5. If the error is a NameError, ensure the variable or function is defined or imported.
-6. Output ONLY the fixed code for the single file that needs correction.
-7. Start your response with 'FILE: [filename]' on the first line, followed by the full corrected code.
-8. DO NOT write any conversational text, explanations, or summaries. ONLY CODE.
-
-Example Response:
-FILE: main.py
-import os
-... (rest of the corrected code) ...
-"""
+    l6_sys = AUTO_DEBUGGER_PROMPT
     for attempt in range(MAX_RETRIES):
         print(f"\n▶ Attempt {attempt+1}")
         
@@ -363,21 +601,118 @@ import os
                     context += f"\n--- {fname} ---\n{f.read()}\n"
             debug_msg = f"ERROR:\n{error_msg}\n\nPROJECT FILES:\n{context}"
             fix_raw = ask_agent("L6_DEBUGGER", l6_sys, debug_msg)
-            match = re.search(r'FILE:\s*([\w\.]+)', fix_raw)
-            if match:
-                target_file = match.group(1)
-                new_code = fix_raw.split(target_file)[-1].strip()
+            
+            # Robust parsing
+            lines = fix_raw.strip().split('\n')
+            target_file = None
+            code_lines = []
+            
+            for i, line in enumerate(lines):
+                if line.startswith("FILE:"):
+                    target_file = line.replace("FILE:", "").strip()
+                    code_lines = lines[i+1:]
+                    break
+            
+            if target_file:
+                new_code = '\n'.join(code_lines).strip()
+                new_code = super_clean(new_code) # Extra cleanup
+                
                 target_path = os.path.join(project_dir, target_file)
                 os.makedirs(os.path.dirname(target_path), exist_ok=True)
                 with open(target_path, "w", encoding="utf-8") as f:
-                    f.write(super_clean(new_code))
+                    f.write(new_code)
                 print(f"🔧 Applied fix to {target_file}")
             else:
-                with open(main_path, "w", encoding="utf-8") as f:
-                    f.write(super_clean(fix_raw))
-                print("🔧 Applied fix to main.py (fallback)")
+                # SMART FALLBACK: Infer target file from content
+                new_code = super_clean(fix_raw)
+                print("⚠️ Debugger did not specify FILE. Attempting to infer target...")
+                
+                inferred_file = None
+                
+                # 1. Check for Class Definitions
+                class_match = re.search(r"class\s+(\w+)", new_code)
+                if class_match:
+                    class_name = class_match.group(1)
+                    # Search modules for this class
+                    for mod_name, mod_data in bb.state["modules"].items():
+                        mod_filename = mod_data.get("filename", f"{mod_name}.py")
+                        # Heuristic: Check if class name is contained in filename (e.g. UserService -> userservice.py)
+                        if class_name.lower() in mod_filename.lower().replace("_", ""):
+                            inferred_file = mod_filename
+                            print(f"   👉 Inferred target file '{inferred_file}' from class '{class_name}'")
+                            break
+                
+                # 2. Check for Script indicators (main.py)
+                if not inferred_file:
+                    if "if __name__" in new_code or "app.run" in new_code or "from" in new_code.split('\n')[0]:
+                         # If it imports 'app' or has main block, likely main.py
+                         if "from " in new_code and " import app" in new_code:
+                             inferred_file = "main.py"
+                             print("   👉 Inferred target file 'main.py' (looks like entry point)")
+
+                if inferred_file:
+                    target_path = os.path.join(project_dir, inferred_file)
+                    with open(target_path, "w", encoding="utf-8") as f:
+                        f.write(new_code)
+                    print(f"🔧 Applied fix to {inferred_file} (inferred)")
+                else:
+                    print("❌ Could not identify target file. Aborting fix to prevent corruption.")
+    
+    phase4_duration = time.time() - phase4_start
+    phase_times["Debugging (L6)"] = phase4_duration
+    
+    overall_duration = time.time() - overall_start_time
+    
+    metrics_summary = bb.metrics.get_summary()
+    
+    print("\n======================================================================")
+    print("🎉 BUILD COMPLETE!")
+    print("======================================================================")
+    print("\n⏱️ TIMING BREAKDOWN:")
+    for phase_name, duration in phase_times.items():
+        print(f"  {phase_name:<30} {duration:>8.1f}s")
+    print(f"  {'─' * 30} {'─' * 10}")
+    print(f"  {'TOTAL BUILD TIME':<30} {overall_duration:>8.1f}s")
+    
+    if metrics_summary["modules_reviewed"] > 0:
+        print("\n📊 CODE QUALITY SUMMARY:")
+        print(f"  Modules reviewed: {metrics_summary['modules_reviewed']}")
+        print(f"  Average quality score: {metrics_summary['average_score']:.1f}/100")
+        print(f"  Total issues found: {metrics_summary['total_issues']}")
+        print(f"  Total optimizations applied: {metrics_summary['total_optimizations']}")
+    
+    print(f"\n📍 Project directory: {project_dir}")
+    print(f"📄 Blackboard: blackboard.json")
+    print(f"📈 Metrics: metrics.json")
+
+    if debug_mode:
+        report_path = os.path.join(project_dir, "debug_report.md")
+        bb.generate_debug_report(report_path)
+        print(f"🐞 Debug Report: debug_report.md")
+
+    print("=" * 70)
+
+import argparse
+import agent_analyst
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="AgentFactory - AI Software Generator")
+    parser.add_argument("--idea", type=str, help="The software idea to build")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode (generates detailed report)")
+    args = parser.parse_args()
+
     if not os.path.exists("output"):
         os.makedirs("output")
-    run_factory(input("What to build? "))
+        
+    if args.idea:
+        print(f"🚀 Starting Factory with idea: {args.idea}")
+        run_factory(args.idea, debug_mode=args.debug)
+    else:
+        # Step 1: Gather Requirements via Interactive Analyst
+        try:
+            requirements = agent_analyst.interview_user()
+            # Step 2: Run the Factory with the gathered context
+            run_factory(requirements, debug_mode=args.debug)
+        except KeyboardInterrupt:
+            print("\n[Aborted]")
+            sys.exit(0)
