@@ -1,22 +1,7 @@
 import ollama
+from prompt_library import ARCHITECT_PROMPT_SOLID
 
-architect_prompt = """
-You are the MODULE ARCHITECT (Level 3).
-Your job is to take ONE module definition from the Blueprint and create a precise TECHNICAL SPECIFICATION.
-
-RULES:
-1. Define clear function names or API Endpoints (if Web/UI).
-2. Specify data types (string, integer, list, dict).
-3. Provide a Mock Example of the input data.
-4. Include safety instructions: use dict.get() for JSON/dict, try/except for external API calls.
-5. Module filenames must be lowercase with underscores only (replace spaces, hyphens, or special characters with underscores). 
-6. Class names must match the module responsibility exactly, in CamelCase.
-7. Each module must have a start() or run() method for execution (or be a class library).
-8. All functions must handle missing or invalid data safely.
-9. Do not write actual code—only specification.
-10. If this is a Frontend/UI module, describe the HTML structure and Templates needed (conceptually).
-11. Output filename explicitly: filename: [module_name].py
-"""
+architect_prompt = ARCHITECT_PROMPT_SOLID
 
 def run_architect(module_data):
     print(f"--- AGENT: MODULE ARCHITECT (L3) for {module_data['name']} ---")

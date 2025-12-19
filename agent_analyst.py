@@ -1,36 +1,72 @@
 import ollama
 import time
+from prompt_library import ANALYST_INTERVIEW_PROMPT, ANALYST_PROMPT
 
-analyst_prompt = """
-You are the LEAD SYSTEM ANALYST (Level 1).
-Your goal is to convert a user's abstract idea into a strict technical architecture in YAML format.
+CRITICAL_QUESTIONS = [
+    "Main purpose of the product",
+    "Target audience and usage context",
+    "Top 1-3 user tasks",
+    "Essential screens/views at launch",
+    "Login/Roles requirements",
+    "Data types to be stored",
+    "Actions on data (create/edit/delete/export)",
+    "Default language and date/time format"
+]
 
-The architecture should favor a WEB APPLICATION structure (Flask/FastAPI) with a clear Frontend (UI) and Backend separation.
+def interview_user():
+    print("--- AGENT: LEAD ANALYST (L1) ---")
+    
+    # 1. Select Mode
+    print("Select Analysis Mode:")
+    print("1. Abstract (Fast, infers details)")
+    print("2. Precise (Thorough, asks all questions)")
+    mode_choice = input("Choice (1/2): ").strip()
+    mode_str = "Precise" if mode_choice == "2" else "Abstract"
+    print(f"Mode selected: {mode_str}")
 
-RULES:
-1. Do NOT use Markdown code blocks.
-2. Output must be valid YAML.
-3. Break the application into independent modules (Logic, Data, WebInterface, Services).
-4. Module names should be **CamelCase**.
-5. Filenames should be lowercase with underscores only (e.g., WeatherService → weather_service.py).
-6. Do NOT create modules that require installing external pip packages (unless standard Flask/FastAPI).
-7. Each module must have a start() or run() method, or be importable classes.
-8. Define inputs, outputs, and key data types in a 'glossary' section.
-9. Do NOT include any introductory text. Start directly with the "modules" key.
-10. IMPORTANT: Enclose all strings that might contain special characters (like {{ }}) in double quotes.
-"""
+    # 2. Initial Idea
+    user_idea = input("\nEnter your app idea (in English): ")
+    
+    # 3. Interview Loop
+    print(f"\n[System] Analyzing request and gathering requirements ({mode_str} Mode)...\n")
+    
+    messages = [{'role': 'system', 'content': ANALYST_INTERVIEW_PROMPT.format(mode=mode_str)}]
+    messages.append({'role': 'user', 'content': user_idea})
+    
+    gathered_context = ""
+    
+    while True:
+        response = ollama.chat(model='llama3.1', messages=messages)
+        content = response['message']['content']
+        
+        if "[[READY]]" in content:
+            gathered_context = content.replace("[[READY]]", "").strip()
+            print("\n" + "-"*40)
+            print("[System] Requirements gathering complete.")
+            print("-"*40)
+            break
+            
+        print(f"\n[Analyst]: {content}")
+        answer = input("\n[You]: ")
+        
+        messages.append({'role': 'assistant', 'content': content})
+        messages.append({'role': 'user', 'content': answer})
+        
+    return gathered_context
 
 def run_analyst():
-    print("--- AGENT: LEAD ANALYST (L1) ---")
-    user_idea = input("Enter your app idea (in English): ")
-    print(f"\n[System] Analyzing request: '{user_idea}'...\n")
+    gathered_context = interview_user()
+
+    # 4. Generate YAML
+    print(f"\n[System] Generating technical blueprint...\n")
     start_time = time.time()
 
-    response = ollama.chat(model='llama3.1', messages=[
-        {'role': 'system', 'content': analyst_prompt},
-        {'role': 'user', 'content': f"Project Idea: {user_idea}. Generate the YAML blueprint."},
-    ])
+    final_messages = [
+        {'role': 'system', 'content': ANALYST_PROMPT},
+        {'role': 'user', 'content': f"Project Requirements:\n{gathered_context}\n\nGenerate the YAML blueprint."}
+    ]
 
+    response = ollama.chat(model='llama3.1', messages=final_messages)
     result = response['message']['content']
     clean_result = result.replace("```yaml", "").replace("```", "").strip()
 
