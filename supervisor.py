@@ -51,6 +51,12 @@ def run_production_cycle(user_idea):
     if iteration > max_iterations:
         print("\n[TIMEOUT] Could not reach a perfect blueprint in 3 tries.")
 
+import agent_analyst
+
 if __name__ == "__main__":
-    idea = "A simple expense tracker that saves receipts to a local text file."
-    run_production_cycle(idea)
+    try:
+        # Use the interactive analyst to gather requirements
+        idea = agent_analyst.interview_user()
+        run_production_cycle(idea)
+    except KeyboardInterrupt:
+        print("\n[Aborted]")
