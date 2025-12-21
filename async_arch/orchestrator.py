@@ -122,6 +122,6 @@ class AsyncOrchestrator:
         return {"mock_output": f"Result from {role}"}
 
 # Entry point for testing
-if __name__ == "__main__":
-    orchestrator = AsyncOrchestrator()
-    asyncio.run(orchestrator.run_pipeline("Super Fast Async App"))
+# if __name__ == "__main__":
+#     orchestrator = AsyncOrchestrator()
+#     asyncio.run(orchestrator.run_pipeline("Super Fast Async App"))

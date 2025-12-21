@@ -1,7 +1,7 @@
 import ollama
 import json
 import re
-from prompt_library import OPTIMIZER_PROMPT
+from utils.prompt_library import OPTIMIZER_PROMPT
 
 def run_optimizer(code: str, review_report: dict) -> str:
     """

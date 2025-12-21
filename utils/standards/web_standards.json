@@ -1,0 +1,70 @@
+{
+  "general": [
+    "Prefer clarity, consistency, and predictability over clever solutions.",
+    "Code must be readable, maintainable, and self-explanatory.",
+    "Follow the principle: accessibility, performance, and security first.",
+    "Avoid unnecessary abstractions and overengineering."
+  ],
+
+  "html": [
+    "Use semantic HTML5 elements (<header>, <nav>, <main>, <section>, <article>, <footer>).",
+    "Ensure exactly one <h1> per page and maintain correct heading hierarchy (h1 → h2 → h3).",
+    "All <img> elements must include meaningful `alt` attributes (empty alt only for decorative images).",
+    "Use <button> for actions and <a> only for navigation.",
+    "Use <label for> properly linked with form inputs.",
+    "Avoid divs when a semantic element exists.",
+    "Ensure markup is valid and passes HTML validation."
+  ],
+
+  "css": [
+    "Use responsive design with a mobile-first approach.",
+    "Prefer CSS Grid and Flexbox; use Bootstrap 5 grid only when needed.",
+    "Avoid inline styles; use reusable utility or component classes.",
+    "Ensure sufficient color contrast for accessibility (minimum 4.5:1).",
+    "Use relative units (rem, em, %, vh/vw) instead of px where possible.",
+    "Respect user preferences: prefers-reduced-motion, prefers-color-scheme.",
+    "Avoid overly specific selectors; keep CSS flat and maintainable."
+  ],
+
+  "javascript": [
+    "Use modern ES6+ syntax (const/let, arrow functions, modules, async/await).",
+    "Never use `var`.",
+    "Wrap async logic in try/catch blocks and handle errors explicitly.",
+    "Avoid global variables; use modules or scoped functions.",
+    "Avoid direct DOM manipulation when using frameworks; otherwise cache querySelector results.",
+    "Never inject user input using innerHTML; use textContent or safe DOM APIs.",
+    "Validate and sanitize all external or user-provided data.",
+    "Avoid blocking operations on the main thread.",
+    "Use strict equality (===) instead of loose equality (==)."
+  ],
+
+  "accessibility": [
+    "All interactive elements must be keyboard accessible.",
+    "Use ARIA roles only when semantic HTML is insufficient.",
+    "Ensure visible focus states for all focusable elements.",
+    "Forms must provide clear error messages and instructions.",
+    "Avoid relying on color alone to convey information."
+  ],
+
+  "performance": [
+    "Minimize DOM size and unnecessary reflows/repaints.",
+    "Defer or lazy-load non-critical JavaScript.",
+    "Use image optimization and modern formats (WebP, AVIF) where supported.",
+    "Avoid unnecessary libraries and large dependencies.",
+    "Prefer CSS animations over JavaScript animations."
+  ],
+
+  "security": [
+    "Never trust user input; always validate and sanitize.",
+    "Protect against XSS by avoiding unsafe HTML injection.",
+    "Avoid exposing sensitive data in the frontend.",
+    "Use HTTPS-only resources and modern browser APIs."
+  ],
+
+  "testing_and_quality": [
+    "Code should be easily testable and deterministic.",
+    "Prefer pure functions where possible.",
+    "Include basic edge-case handling.",
+    "Avoid dead code and unused variables."
+  ]
+}
