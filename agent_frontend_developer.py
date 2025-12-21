@@ -4,6 +4,13 @@ from prompt_library import get_frontend_developer_prompt
 
 MODEL = 'llama3.1'
 
+def sanitize_filename(filename: str) -> str:
+    """Remove invalid Windows/Unix filename characters."""
+    invalid_chars = r'[<>:"/\\|?*]'
+    sanitized = re.sub(invalid_chars, '', filename)
+    sanitized = sanitized.strip('.')
+    return sanitized if sanitized else 'file.txt'
+
 def run_frontend_developer(app_idea: str, api_spec: str, blackboard=None):
     """Generate frontend files (HTML, CSS, JS) for a web application"""
     print("--- AGENT: FRONTEND DEVELOPER (L4.5) is generating UI... ---")
@@ -41,7 +48,7 @@ def extract_frontend_files(response_text: str) -> dict:
     html_pattern = r'(?:<!--\s*)?HTML\s+FILE:\s*(\S+)(?:\s*-->)?\s*\n(.*?)(?=(?:<!--|/\*|//)\s*(?:CSS|JS|JAVASCRIPT)\s+FILE:|$)'
     html_matches = re.finditer(html_pattern, response_text, re.DOTALL | re.IGNORECASE)
     for match in html_matches:
-        filename = match.group(1).strip()
+        filename = sanitize_filename(match.group(1).strip())
         content = match.group(2).strip()
         # Clean up markdown code blocks if present
         content = re.sub(r'^```(?:html|html5)?\s*', '', content, flags=re.MULTILINE)
@@ -52,7 +59,7 @@ def extract_frontend_files(response_text: str) -> dict:
     css_pattern = r'(?:/\*\s*)?CSS\s+FILE:\s*(\S+)(?:\s*\*/)?\s*\n(.*?)(?=(?:<!--|/\*|//)\s*(?:JS|JAVASCRIPT)\s+FILE:|$)'
     css_matches = re.finditer(css_pattern, response_text, re.DOTALL | re.IGNORECASE)
     for match in css_matches:
-        filename = match.group(1).strip()
+        filename = sanitize_filename(match.group(1).strip())
         content = match.group(2).strip()
         # Clean up markdown code blocks if present
         content = re.sub(r'^```(?:css)?\s*', '', content, flags=re.MULTILINE)
@@ -63,7 +70,7 @@ def extract_frontend_files(response_text: str) -> dict:
     js_pattern = r'(?://\s*)?(?:JS|JAVASCRIPT)\s+FILE:\s*(\S+)(?:\s*)?\s*\n(.*?)(?=(?:<!--|/\*|//)\s*(?:HTML|CSS|JS|JAVASCRIPT)\s+FILE:|$)'
     js_matches = re.finditer(js_pattern, response_text, re.DOTALL | re.IGNORECASE)
     for match in js_matches:
-        filename = match.group(1).strip()
+        filename = sanitize_filename(match.group(1).strip())
         content = match.group(2).strip()
         # Clean up markdown code blocks if present
         content = re.sub(r'^```(?:javascript|js)?\s*', '', content, flags=re.MULTILINE)

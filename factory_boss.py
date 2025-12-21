@@ -6,6 +6,7 @@ import time
 import subprocess
 import sys
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from factory_boss_blackboard import FactoryBlackboard
 from agent_code_reviewer import run_reviewer
 from agent_code_optimizer import run_optimizer
@@ -21,77 +22,159 @@ MAX_RETRIES = 3
 # ---------- UTILS ----------
 def fix_yaml_content(text):
     """
-    Attempts to fix common YAML syntax errors in agent output,
-    specifically unquoted strings containing colons or braces.
+    Fixes common YAML syntax errors in agent output.
+    Removes invalid lines and quotes values containing special characters.
     """
     lines = text.split('\n')
     fixed_lines = []
     
-    for line in lines:
+    for i, line in enumerate(lines):
+        original_line = line
+        
         # Skip empty lines or comments
         if not line.strip() or line.strip().startswith('#'):
             fixed_lines.append(line)
             continue
-            
-        # Check for key: value pattern
-        # This regex looks for: indent + optional dash + key + colon + space + value
-        match = re.match(r'^(\s*(?:-\s+)?)([\w\s]+):\s+(.+)$', line)
         
-        if match:
-            prefix = match.group(1)
-            key = match.group(2)
-            val = match.group(3).strip()
-            
-            # If the value is already quoted, leave it alone
-            if (val.startswith('"') and val.endswith('"')) or \
-               (val.startswith("'") and val.endswith("'")):
-                fixed_lines.append(line)
-                continue
-                
-            # If value looks like a list or object start, skip
-            if val in ['|', '>', '|-', '>-', '{', '[']:
-                fixed_lines.append(line)
-                continue
-            
-            # If value is just a number or boolean, skip
-            if val.lower() in ['true', 'false', 'yes', 'no', 'null'] or val.replace('.', '', 1).isdigit():
-                fixed_lines.append(line)
-                continue
-
-            # Heuristic: If value contains ':' or '{{', it MUST be quoted
-            # Also quote if it's a long string description to be safe
-            if ':' in val or '{{' in val or len(val) > 20:
-                val_escaped = val.replace('"', '\\"')
-                # Reconstruct the line
-                new_line = f'{prefix}{key}: "{val_escaped}"'
-                fixed_lines.append(new_line)
-                continue
-                
-        fixed_lines.append(line)
+        # Get indentation level
+        indent = len(line) - len(line.lstrip())
+        stripped = line.strip()
         
+        # Lines starting with '-' are list items
+        if stripped.startswith('-'):
+            # List item line - keep it
+            fixed_lines.append(line)
+            continue
+        
+        # Check for key: value pattern (must have a colon)
+        if ':' not in stripped:
+            # No colon - this line doesn't fit YAML structure
+            # Only keep if it's indented (continuation) and previous line didn't end with colon
+            if i > 0 and indent > 0:
+                prev_stripped = lines[i-1].strip()
+                # Check if previous line expects a value (ends with |, >, or has key: pattern)
+                if prev_stripped.endswith(('|', '>', '|-', '>-', '[', '{')):
+                    fixed_lines.append(line)
+                    continue
+            # Skip this line - it's orphaned text
+            continue
+        
+        # Has a colon - parse it
+        colon_idx = stripped.find(':')
+        key = stripped[:colon_idx].strip()
+        val = stripped[colon_idx+1:].strip()
+        
+        # Validate key format (should be word characters, spaces, or dashes)
+        if not re.match(r'^[\w\s-]+$', key):
+            # Invalid key format
+            continue
+        
+        # Handle empty or special values
+        if not val or val in ['|', '>', '|-', '>-', '{', '[']:
+            fixed_lines.append(line)
+            continue
+        
+        # If value is already quoted or is a number/boolean, leave it
+        if (val.startswith('"') and val.endswith('"')) or \
+           (val.startswith("'") and val.endswith("'")):
+            fixed_lines.append(line)
+            continue
+        
+        if val.lower() in ['true', 'false', 'yes', 'no', 'null'] or val.replace('.', '', 1).isdigit():
+            fixed_lines.append(line)
+            continue
+        
+        # Check if value is a list or dict literal
+        if val.startswith('[') and val.endswith(']'):
+            # It's a JSON-style list, keep it as-is
+            fixed_lines.append(line)
+            continue
+        
+        if val.startswith('{') and val.endswith('}'):
+            # It's a JSON-style dict, keep it as-is
+            fixed_lines.append(line)
+            continue
+        
+        # Quote if value contains special characters or is long
+        if ':' in val or '{{' in val or '"' in val or "'" in val or len(val) > 50:
+            val_escaped = val.replace('\\', '\\\\').replace('"', '\\"')
+            indent_str = ' ' * indent
+            new_line = f'{indent_str}{key}: "{val_escaped}"'
+            fixed_lines.append(new_line)
+        else:
+            fixed_lines.append(original_line)
+    
     return '\n'.join(fixed_lines)
 
 def super_clean(text, format_type="python"):
-    blocks = re.findall(r'```(?:python|yaml)?\s*(.*?)\s*```', text, re.DOTALL)
+    blocks = re.findall(r'```(?:python|py|yaml|yml|json)?\s*(.*?)\s*```', text, re.DOTALL | re.IGNORECASE)
     if blocks:
         text = "\n".join(blocks)
     else:
-        # Fallback: if no blocks, try to clean based on known junk
-        # But first, check if it looks like code at all
-        if format_type == "python":
-            # If it starts with conversational text and has no code structure, reject it
-            if not any(k in text for k in ['def ', 'import ', 'class ', 'print(', 'if ']):
-                 # It might be pure garbage text
-                 pass
-        
-        text = text.replace('```python', '').replace('```yaml', '').replace('```', '')
+        text = text.replace('```python', '').replace('```yaml', '').replace('```yml', '').replace('```json', '').replace('```', '')
 
     if format_type == "yaml":
-        # Attempt to find the start of the YAML structure if it's mixed with text
-        match = re.search(r'^(modules|glossary|api_spec):', text, re.MULTILINE)
+        # Remove SQL statements and comments that break YAML parsing
+        text = re.sub(r'^--.*$', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^(CREATE|ALTER|DROP|SELECT|INSERT|UPDATE|DELETE|PRAGMA)\s+.*?(?:;|$)', '', text, flags=re.MULTILINE | re.IGNORECASE | re.DOTALL)
+        
+        # Remove YAML document separators
+        text = re.sub(r'^---\s*$', '', text, flags=re.MULTILINE).strip()
+        
+        # Find the start of the YAML structure
+        match = re.search(r'^(modules|glossary|api_spec|blueprint):', text, re.MULTILINE)
         if match:
             text = text[match.start():]
+        
         text = text.strip()
+        
+        # Clean lines that don't fit YAML structure
+        lines = text.split('\n')
+        min_indent = float('inf')
+        
+        # Find minimum indentation to establish baseline
+        for line in lines:
+            if line.strip() and not line.strip().startswith('#'):
+                indent = len(line) - len(line.lstrip())
+                if ':' in line or line.strip().startswith('-'):
+                    min_indent = min(min_indent, indent)
+        
+        if min_indent == float('inf'):
+            min_indent = 0
+        
+        # Process lines with context
+        cleaned_lines = []
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            
+            # Empty or comment lines are OK
+            if not stripped or stripped.startswith('#'):
+                cleaned_lines.append(line)
+                continue
+            
+            # Get indentation
+            indent = len(line) - len(line.lstrip())
+            
+            # List items and key-value pairs are OK
+            if stripped.startswith('-') or ':' in stripped:
+                cleaned_lines.append(line)
+                continue
+            
+            # Check if this could be a continuation line
+            if i > 0 and indent > min_indent:
+                prev_line = lines[i-1].strip()
+                # If previous line ends with |, >, {, or [ - this is a continuation
+                if prev_line.endswith(('|', '>', '|-', '>-', '{', '[')):
+                    cleaned_lines.append(line)
+                    continue
+            
+            # Orphaned text with no colon at root/base level - skip it
+            if indent <= min_indent and ':' not in stripped:
+                continue
+            
+            cleaned_lines.append(line)
+        
+        text = '\n'.join(cleaned_lines).strip()
         return fix_yaml_content(text)
 
     lines = text.split('\n')
@@ -99,7 +182,7 @@ def super_clean(text, format_type="python"):
     junk_prefixes = (
         "here is", "sure", "note:", "this script", "i have",
         "however", "please", "the following", "i've added", "corrected version",
-        "na podstawie", "w oparciu", "poniżej" # Add Polish/common conversational prefixes
+        "na podstawie", "w oparciu", "poniżej"
     )
     for line in lines:
         stripped = line.lower().strip()
@@ -155,6 +238,45 @@ def ask_agent(role, system, message, format_type="python", blackboard=None, agen
             except:
                 pass
         return ""
+
+def extract_audit_issues(audit_text):
+    """
+    Extract structured issues from auditor feedback.
+    Parses the audit report and returns a list of actionable issues.
+    """
+    issues = []
+    
+    lines = audit_text.split('\n')
+    for line in lines:
+        line = line.strip()
+        
+        if not line or line.startswith('VERDICT:') or line.startswith('---') or line.startswith('['):
+            continue
+        
+        line_lower = line.lower()
+        
+        if 'circular' in line_lower and 'dependency' in line_lower:
+            issues.append(f"ARCHITECTURE: Remove circular dependencies - {line[:120]}")
+        
+        elif 'missing' in line_lower and 'responsibility' in line_lower:
+            issues.append(f"COMPLETENESS: Add clear responsibility description to all modules - {line[:80]}")
+        
+        elif 'missing' in line_lower and 'field' in line_lower:
+            issues.append(f"STRUCTURE: Ensure all modules have required fields (name, filename, type, responsibility, requires)")
+        
+        elif 'tight coupling' in line_lower:
+            issues.append(f"COUPLING: Reduce dependencies between modules for loose coupling")
+        
+        elif ('duplication' in line_lower or 'duplicate' in line_lower or 'overlapping' in line_lower) and 'responsibility' in line_lower:
+            issues.append(f"DESIGN: Consolidate modules with overlapping responsibilities")
+        
+        elif 'unclear' in line_lower:
+            issues.append(f"CLARITY: Make module responsibilities clearer and more specific")
+    
+    if not issues and 'FAILED' in audit_text.upper():
+        issues.append("GENERAL: Review architecture for violations of separation of concerns")
+    
+    return issues
 
 def manage_dependencies(project_dir):
     print("\n📦 [DEPENDENCY MANAGER] Checking libraries...")
@@ -240,6 +362,7 @@ def run_factory(idea, debug_mode=False):
 
     blueprint = None
     max_planning_retries = 3
+    accumulated_issues = []
     
     for i in range(max_planning_retries):
         print(f"\n--- Planning Iteration {i+1} ---")
@@ -247,12 +370,16 @@ def run_factory(idea, debug_mode=False):
         # L1: Generate
         if i == 0:
             prompt = f"App idea: {idea}"
+            print("  📝 L1 ANALYST: Analyzing app idea and creating architecture...")
         else:
-            prompt = f"Previous plan was rejected. Improve it based on this feedback:\n{audit_feedback}\n\nOriginal Idea: {idea}"
+            issues_context = "ISSUES TO FIX FROM PREVIOUS ATTEMPTS:\n"
+            for j, issue in enumerate(accumulated_issues, 1):
+                issues_context += f"{j}. {issue}\n"
+            prompt = f"{issues_context}\nOriginal Idea: {idea}\n\nCreate a completely new architecture that addresses all the issues listed above."
+            print(f"  📝 L1 ANALYST: Fixing {len(accumulated_issues)} issues from previous attempt...")
             
         blueprint_raw = ask_agent("L1_ANALYST", l1_sys, prompt, "yaml")
         
-        # Try to parse
         try:
             temp_blueprint = yaml.safe_load(blueprint_raw)
              # --- HEALING LOGIC ---
@@ -269,19 +396,26 @@ def run_factory(idea, debug_mode=False):
             # ---------------------
         except Exception as e:
             print(f"❌ YAML Parsing Failed: {e}")
-            audit_feedback = f"YAML Syntax Error: {e}"
+            accumulated_issues.append(f"YAML Syntax: {str(e)[:80]}")
             continue
 
         # L2: Audit
+        print(f"  🔍 L2 AUDITOR: Reviewing architecture ({len(temp_blueprint.get('modules', []))} modules)...")
         audit_raw = ask_agent("L2_AUDITOR", l2_sys, f"Review this blueprint:\n{json.dumps(temp_blueprint, indent=2)}")
         
         if "VERDICT: PASSED" in audit_raw:
-            print("✅ Auditor approved the plan.")
+            print(f"✅ Auditor approved! Architecture includes {len(temp_blueprint.get('modules', []))} modules:")
+            for mod in temp_blueprint.get('modules', []):
+                print(f"    • {mod.get('name')}: {mod.get('responsibility')[:60]}...")
             blueprint = temp_blueprint
             break
         else:
-            print(f"⚠️ Auditor rejected the plan. Reason:\n{audit_raw}")
-            audit_feedback = audit_raw
+            print(f"⚠️ Auditor rejected the plan. Issues found:")
+            structured_issues = extract_audit_issues(audit_raw)
+            for issue in structured_issues[:3]:
+                print(f"    • {issue[:70]}...")
+                if issue not in accumulated_issues:
+                    accumulated_issues.append(issue)
 
     if not blueprint:
         print("❌ Failed to generate a valid plan after retries. Exiting.")
@@ -293,53 +427,69 @@ def run_factory(idea, debug_mode=False):
     bb.set_architecture(blueprint)
     print(f"📐 Blueprint accepted and saved. (⏱️ {phase1_duration:.1f}s)")
     print(json.dumps(blueprint, indent=2))
+    
+    # LOG PLANNING ATTEMPTS
+    for i, issue in enumerate(accumulated_issues, 1):
+        bb.log_agent_attempt(
+            agent="L1_ANALYST+L2_AUDITOR",
+            module="planning",
+            attempt_num=i,
+            input_data=f"Iteration {i}",
+            output=f"Resolved: {issue}",
+            status="success"
+        )
 
-    # PHASE 2 & 3: L3 ARCHITECT & L4 DEVELOPER
+    # PHASE 2 & 3: L3 ARCHITECT & L4 DEVELOPER – PARALLEL EXECUTION
     phase2_start = time.time()
     print("\n======================================================================")
-    print("PHASE 3: L3 ARCHITECT & L4 DEVELOPER – IMPLEMENTATION")
+    print("PHASE 3: L3 ARCHITECT & L4 DEVELOPER – PARALLEL IMPLEMENTATION")
     print("======================================================================")
-    for module in blueprint['modules']:
+    print(f"🚀 Launching {len(blueprint['modules'])} parallel module generations...")
+    
+    # Use ThreadPoolExecutor for parallel module generation
+    max_workers = min(4, len(blueprint['modules']))  # Max 4 parallel workers
+    results = {}
+    
+    def _generate_single_module(module):
+        """Generate a single module in parallel"""
         m_name = module['name'].lower().replace(" ", "_")
         filename = f"{m_name}.py"
         module_type = module.get('module_type', 'service')
         
+        print(f"  ▶ [{m_name}] Starting L3+L4 generation...")
+        print(f"    📋 L3 ARCHITECT: Designing {module_type} with API specification...")
+        
         # L3: API spec
         l3_sys = FACTORY_BOSS_L3_PROMPT
         l3_context = f"MODULE_TYPE: {module_type}\n\nModule Details:\n{yaml.dump(module)}"
-        spec_raw = ask_agent(f"L3_{m_name}", l3_sys, l3_context, "yaml")
+        spec_raw = ask_agent(f"L3_{m_name}", l3_sys, l3_context, "yaml", 
+                           blackboard=bb, agent_name="architect", module_name=m_name)
         
         # Parse L3 output to register API in Blackboard
         extracted_type = None
         try:
             l3_data = yaml.safe_load(spec_raw)
             if isinstance(l3_data, dict):
-                # Extract module_type if present, fallback to what we passed in
                 extracted_type = l3_data.get("module_type", module_type)
-                
                 if "api_spec" in l3_data:
                     bb.register_api(m_name, l3_data["api_spec"])
-                    print(f"📝 Registered API contract for {m_name}")
                 else:
-                    # Fallback if model didn't follow YAML strict structure perfectly
                     bb.register_api(m_name, {"raw_spec": spec_raw})
             else:
-                # Fallback if model didn't follow YAML strict structure perfectly
                 bb.register_api(m_name, {"raw_spec": spec_raw})
         except Exception as e:
-            print(f"⚠️ Failed to parse API spec for {m_name}: {e}")
+            print(f"    ⚠️ Failed to parse API spec for {m_name}: {e}")
             bb.register_api(m_name, {"raw_spec": spec_raw})
             extracted_type = module_type
 
-        # Use extracted type (from architect) or fallback to input type
         final_module_type = extracted_type if extracted_type else module_type
         bb.register_module(m_name, filename, spec_raw, final_module_type)
 
         # L4: Developer
-        l4_sys = get_factory_boss_l4_prompt(filename)
+        print(f"    💻 L4 DEVELOPER: Implementing {final_module_type} module...")
+        l4_sys = get_factory_boss_l4_prompt(filename, module_type=final_module_type)
         l4_context = f"FILENAME: {filename}\nMODULE_TYPE: {final_module_type}\n\nSPECIFICATION:\n{spec_raw}"
         
-        # RETRY LOOP FOR L4 GENERATION
         code = ""
         l4_success = False
         l4_attempts = 0
@@ -348,112 +498,129 @@ def run_factory(idea, debug_mode=False):
         while l4_attempts < l4_max_retries and not l4_success:
             l4_attempts += 1
             if l4_attempts > 1:
-                print(f"⚠️ L4 Validation failed. Retrying ({l4_attempts}/{l4_max_retries})...")
-                # Add "Previous Attempt Failed" context if retrying
+                print(f"    ⚠️ L4 Validation failed. Retrying ({l4_attempts}/{l4_max_retries})...")
                 l4_context += f"\n\nIMPORTANT: Your previous attempt failed validation. ENSURE you include the root route @app.route('/') and render_template!"
             
             code = ask_agent(f"L4_{m_name}", l4_sys, l4_context, blackboard=bb, agent_name="developer", module_name=m_name)
         
-            # ---------- L4 OUTPUT VALIDATION (WEB UI CONTRACT) ----------
             if final_module_type == "web_interface":
                 validation_error = None
                 if "render_template" not in code:
-                    validation_error = f"{filename} does not render HTML (render_template missing)"
-                
-                # Regex check for root route to handle spaces: @app.route( ' / ' )
+                    validation_error = f"{filename} does not render HTML"
                 if not re.search(r"@app\.route\(\s*['\"]/['\"]\s*\)", code):
                     validation_error = f"{filename} missing root '/' route"
                 
                 if validation_error:
-                    print(f"❌ L4 Validation Error: {validation_error}")
+                    print(f"    ❌ L4 Validation Error: {validation_error}")
                     if l4_attempts >= l4_max_retries:
-                         raise RuntimeError(f"L4 validation failed after {l4_max_retries} attempts: {validation_error}")
+                        raise RuntimeError(f"L4 validation failed: {validation_error}")
                 else:
                     l4_success = True
             else:
                 l4_success = True
-        # -----------------------------------------------------------
 
-        # PHASE 3.5: L4.5 CODE REVIEWER
-        print(f"\n📋 [L4.5_REVIEWER] Reviewing {filename}...")
+        # L4.5 Code Review (with strict quality standards)
         try:
-            review_report = run_reviewer(code)
+            print(f"    🔎 CODE REVIEW: Analyzing code quality (type: {final_module_type})...")
+            review_report = run_reviewer(
+                code=code,
+                module_name=m_name,
+                module_type=final_module_type,
+                filename=filename
+            )
             quality_score = review_report.get("quality_score", 0)
-            issues_list = review_report.get("issues", [])
-            issues_count = len(issues_list)
-            print(f"   Quality Score: {quality_score}/100, Issues Found: {issues_count}")
-            if issues_list:
-                print("   Issues identified:")
-                for i, issue in enumerate(issues_list[:5], 1):
-                    print(f"     {i}. {issue}")
+            issues_count = len(review_report.get("issues", []))
+            verdict = review_report.get("verdict", "PENDING")
             
-            # PHASE 3.75: L4.75 CODE OPTIMIZER
-            if quality_score < 85 or issues_count > 3:
-                print(f"📝 [L4.75_OPTIMIZER] Optimizing {filename}...")
-                optimized_code = run_optimizer(code, review_report)
-                code = optimized_code
-                optimizations_count = len(review_report.get("issues", []))
-                print(f"   Applied {optimizations_count} optimizations")
-                
-                bb.log_quality_metrics(m_name, quality_score, issues_count, optimizations_count, review_report)
+            if issues_count > 0:
+                print(f"      Quality Score: {quality_score}/100, Issues: {issues_count}, Verdict: {verdict}")
             else:
-                print(f"   Code quality acceptable, skipping optimization")
+                print(f"      Quality Score: {quality_score}/100 - No issues! Verdict: {verdict}")
+            
+            # Module must achieve 85+ score or REQUEST_CHANGES to proceed with optimization
+            if quality_score < 85 and verdict in ["REQUEST_CHANGES", "REJECT"]:
+                if quality_score < 70:
+                    print(f"    ❌ Code quality critical ({quality_score}/100). Requesting re-generation...")
+                    # Could retry L4 here with feedback
+                    pass
+                else:
+                    print(f"    ⚡ OPTIMIZER: Applying improvements...")
+                    code = run_optimizer(code, review_report)
+                    bb.log_quality_metrics(m_name, quality_score, issues_count, issues_count, review_report)
+                    print(f"      Optimizations applied!")
+            else:
                 bb.log_quality_metrics(m_name, quality_score, issues_count, 0, review_report)
+                print(f"      ✅ Code meets quality standards!")
         except Exception as e:
-            print(f"⚠️ Code review/optimization failed: {e}")
+            print(f"    ⚠️ Code review failed: {e}")
         
+        # Save module file
         file_path = os.path.join(project_dir, filename)
         os.makedirs(os.path.dirname(file_path), exist_ok=True)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(code)
-
-        # PHASE 3.9: Frontend Generation for Web Modules
-        is_web_module = any(
-            keyword in m_name.lower() 
-            for keyword in ["web", "interface", "ui", "frontend", "view"]
-        )
-        if is_web_module:
-            print(f"\n🎨 [L4.5_FRONTEND_DEVELOPER] Generating UI for {m_name}...")
+        print(f"  ✅ [{m_name}] Module generated successfully")
+        
+        return {"m_name": m_name, "filename": filename, "spec": spec_raw, "code": code}
+    
+    # Run module generation in parallel
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {executor.submit(_generate_single_module, module): module for module in blueprint['modules']}
+        for future in as_completed(futures):
             try:
-                # Generate frontend files
-                frontend_code = run_frontend_developer(
-                    idea, 
-                    spec_raw,
-                    blackboard=bb
-                )
-                
-                # Extract HTML, CSS, JS files
+                result = future.result()
+                results[result['m_name']] = result
+            except Exception as e:
+                print(f"❌ Module generation failed: {e}")
+    
+    # Frontend generation (sequential after all modules done)
+    print("\n🎨 Generating frontend files...")
+    for m_name in results:
+        result = results[m_name]
+        is_web_module = any(kw in m_name.lower() for kw in ["web", "interface", "ui", "frontend", "view"])
+        
+        if is_web_module:
+            try:
+                print(f"  🎨 L4.5 FRONTEND DEVELOPER: Creating UI for '{m_name}'...")
+                frontend_code = run_frontend_developer(idea, result['spec'], blackboard=bb)
                 frontend_files = extract_frontend_files(frontend_code)
                 
                 if frontend_files:
-                    # Create templates and static directories
                     templates_dir = os.path.join(project_dir, "templates")
                     static_dir = os.path.join(project_dir, "static")
                     os.makedirs(templates_dir, exist_ok=True)
                     os.makedirs(static_dir, exist_ok=True)
                     
-                    # Save files with appropriate structure
+                    html_files = []
+                    css_files = []
+                    js_files = []
+                    
                     for fname, content in frontend_files.items():
                         if fname.endswith('.html'):
                             target_path = os.path.join(templates_dir, fname)
+                            html_files.append(fname)
                         elif fname.endswith('.css'):
                             target_path = os.path.join(static_dir, fname)
+                            css_files.append(fname)
                         elif fname.endswith('.js'):
                             target_path = os.path.join(static_dir, fname)
+                            js_files.append(fname)
                         else:
                             target_path = os.path.join(project_dir, fname)
                         
                         os.makedirs(os.path.dirname(target_path), exist_ok=True)
                         with open(target_path, "w", encoding="utf-8") as f:
                             f.write(content)
-                        print(f"   ✅ Created {target_path}")
                     
-                    # Update blackboard to track frontend files
                     bb.state.setdefault("frontend_files", []).extend(frontend_files.keys())
-                else:
-                    print(f"   ⚠️ No frontend files extracted")
+                    if html_files:
+                        print(f"    ✅ HTML files: {', '.join(html_files)}")
+                    if css_files:
+                        print(f"    ✅ CSS files: {', '.join(css_files)}")
+                    if js_files:
+                        print(f"    ✅ JS files: {', '.join(js_files)}")
             except Exception as e:
-                print(f"   ⚠️ Frontend generation failed: {e}")
+                print(f"  ⚠️ Frontend generation failed: {e}")
 
     phase2_duration = time.time() - phase2_start
     phase_times["Development (L3+L4)"] = phase2_duration
@@ -477,6 +644,8 @@ def run_factory(idea, debug_mode=False):
     l5_sys = FACTORY_BOSS_L5_PROMPT
     integrator_input = f"Blackboard snapshot:\n{bb.snapshot()}\n\n{modules_info}\n\nIdea: {idea}"
     
+    print(f"  🔗 L5 INTEGRATOR: Creating main.py with {len(bb.state['modules'])} module imports...")
+    
     l5_attempts = 0
     l5_max_retries = 3
     l5_success = False
@@ -485,10 +654,11 @@ def run_factory(idea, debug_mode=False):
     while l5_attempts < l5_max_retries and not l5_success:
         l5_attempts += 1
         if l5_attempts > 1:
-             print(f"⚠️ L5 Generation failed validation. Retrying ({l5_attempts}/{l5_max_retries})...")
+             print(f"    ⚠️ L5 Validation failed. Retrying ({l5_attempts}/{l5_max_retries})...")
              integrator_input += "\n\nIMPORTANT: Your previous output was rejected. You MUST output ONLY valid Python code. Do not summarize or explain."
 
-        main_code = ask_agent("L5_INTEGRATOR", l5_sys, integrator_input)
+        main_code = ask_agent("L5_INTEGRATOR", l5_sys, integrator_input,
+                            blackboard=bb, agent_name="integrator", module_name="main")
         
         # Validate main.py quality
         validation_error = None
@@ -519,16 +689,21 @@ def run_factory(idea, debug_mode=False):
                 validation_error = "main.py contains utility functions instead of entry point"
         
         if validation_error:
-             print(f"❌ L5 Validation Error: {validation_error}")
+             print(f"    ❌ Validation Error: {validation_error}")
              if l5_attempts >= l5_max_retries:
-                  print("⚠️ L5 failed after max retries. Saving last attempt anyway.")
+                  print("    ⚠️ L5 failed after max retries. Saving last attempt anyway.")
                   l5_success = True 
         else:
+             print(f"    ✅ Validation passed! main.py created successfully")
              l5_success = True
 
     main_path = os.path.join(project_dir, "main.py")
     with open(main_path, "w", encoding="utf-8") as f:
         f.write(main_code)
+    
+    imports_count = main_code.count("import ")
+    routes_count = main_code.count("@app.route") + main_code.count("@router.")
+    print(f"    📊 main.py stats: {imports_count} imports, {routes_count} routes defined")
 
     phase3_duration = time.time() - phase3_start
     phase_times["Integration (L5)"] = phase3_duration
@@ -540,11 +715,12 @@ def run_factory(idea, debug_mode=False):
     # PHASE 5: AUTO-DEBUG LOOP
     phase4_start = time.time()
     print("\n======================================================================")
-    print("PHASE 5: L6 AUTO-DEBUG LOOP")
+    print("PHASE 5: L6 AUTO-DEBUG LOOP – TESTING & FIXING")
     print("======================================================================")
     l6_sys = AUTO_DEBUGGER_PROMPT
     for attempt in range(MAX_RETRIES):
         print(f"\n▶ Attempt {attempt+1}")
+        print(f"  🧪 L6 DEBUGGER: Testing application...")
         
         # Use Popen to handle potential Web Servers (long-running)
         proc = subprocess.Popen(
@@ -595,12 +771,16 @@ def run_factory(idea, debug_mode=False):
                     print(f"⚠️ Failed to auto-install {pkg_to_install}: {e}")
             # -------------------------------------
 
+            print(f"    🔍 Analyzing error: {error_msg.split(chr(10))[0][:80]}...")
+            
             context = ""
             for fname in bb.state["files_created"]:
                 with open(os.path.join(project_dir, fname), "r") as f:
                     context += f"\n--- {fname} ---\n{f.read()}\n"
             debug_msg = f"ERROR:\n{error_msg}\n\nPROJECT FILES:\n{context}"
-            fix_raw = ask_agent("L6_DEBUGGER", l6_sys, debug_msg)
+            print(f"    🧠 L6 DEBUGGER: Generating fix...")
+            fix_raw = ask_agent("L6_DEBUGGER", l6_sys, debug_msg,
+                              blackboard=bb, agent_name="debugger", module_name="debug")
             
             # Robust parsing
             lines = fix_raw.strip().split('\n')
@@ -615,13 +795,13 @@ def run_factory(idea, debug_mode=False):
             
             if target_file:
                 new_code = '\n'.join(code_lines).strip()
-                new_code = super_clean(new_code) # Extra cleanup
+                new_code = super_clean(new_code)
                 
                 target_path = os.path.join(project_dir, target_file)
                 os.makedirs(os.path.dirname(target_path), exist_ok=True)
                 with open(target_path, "w", encoding="utf-8") as f:
                     f.write(new_code)
-                print(f"🔧 Applied fix to {target_file}")
+                print(f"    ✅ Applied fix to {target_file}")
             else:
                 # SMART FALLBACK: Infer target file from content
                 new_code = super_clean(fix_raw)
@@ -685,10 +865,10 @@ def run_factory(idea, debug_mode=False):
     print(f"📄 Blackboard: blackboard.json")
     print(f"📈 Metrics: metrics.json")
 
-    if debug_mode:
-        report_path = os.path.join(project_dir, "debug_report.md")
-        bb.generate_debug_report(report_path)
-        print(f"🐞 Debug Report: debug_report.md")
+    # Always generate debug report (can disable with --no-debug if needed)
+    report_path = os.path.join(project_dir, "debug_report.md")
+    bb.generate_debug_report(report_path)
+    print(f"🐞 Debug Report: debug_report.md")
 
     print("=" * 70)
 
