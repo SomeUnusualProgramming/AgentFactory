@@ -29,6 +29,9 @@ class ModuleType(str, Enum):
     SERVICE = "service"
     UTILITY = "utility"
     DATA = "data"
+    FRONTEND_HTML = "frontend_html"
+    FRONTEND_CSS = "frontend_css"
+    FRONTEND_JS = "frontend_js"
 
 
 class Severity(str, Enum):
@@ -224,6 +227,89 @@ UTILITY_RULES = {
     ],
 }
 
+FRONTEND_HTML_RULES = {
+    "type": ModuleType.FRONTEND_HTML,
+    "name": "Frontend HTML Module",
+    "description": "HTML Templates",
+    
+    "MUST_HAVE": [
+        "<!DOCTYPE html>",
+        "<html",
+        "</html>",
+        "<body",
+        "</body>",
+    ],
+    
+    "MUST_NOT_HAVE": [
+        "```html",
+        "```",
+        "Here is the code",
+        "This code",
+    ],
+    
+    "FORBIDDEN_PATTERNS": [
+        {
+            "pattern": r"```",
+            "message": "File contains Markdown code blocks",
+        },
+        {
+            "pattern": r"(?i)(here is|this code|below is)",
+            "message": "File contains conversational text",
+        },
+    ]
+}
+
+FRONTEND_CSS_RULES = {
+    "type": ModuleType.FRONTEND_CSS,
+    "name": "Frontend CSS Module",
+    "description": "CSS Stylesheets",
+    
+    "MUST_HAVE": [
+        "{",
+        "}",
+    ],
+    
+    "FORBIDDEN_PATTERNS": [
+        {
+            "pattern": r"```",
+            "message": "File contains Markdown code blocks",
+        },
+        {
+            "pattern": r"(?i)(here is|this code|below is|css file)",
+            "message": "File contains conversational text",
+        },
+        {
+            "pattern": r"<style>",
+            "message": "CSS file should not contain <style> tags",
+        },
+    ]
+}
+
+FRONTEND_JS_RULES = {
+    "type": ModuleType.FRONTEND_JS,
+    "name": "Frontend JS Module",
+    "description": "JavaScript Code",
+    
+    "MUST_HAVE": [
+        "function",
+    ],
+    
+    "FORBIDDEN_PATTERNS": [
+        {
+            "pattern": r"```",
+            "message": "File contains Markdown code blocks",
+        },
+        {
+            "pattern": r"(?i)(here is|this code|below is|js file)",
+            "message": "File contains conversational text",
+        },
+        {
+            "pattern": r"<script>",
+            "message": "JS file should not contain <script> tags",
+        },
+    ]
+}
+
 
 # =================================================================
 # UNIVERSAL QUALITY RULES (All Modules)
@@ -278,6 +364,16 @@ UNIVERSAL_RULES = {
         "severity": Severity.LOW,
         "max": 100,
     },
+
+    "common_pitfalls": {
+        "requirement": "Avoid common Python errors",
+        "severity": Severity.HIGH,
+        "forbidden_patterns": [
+            (r"\.contains\(", "String object has no attribute 'contains'. Use 'in' operator."),
+            (r"def\s+\w+\s*\(.*=\s*\[\].*\)", "Mutable default argument detected. Use None."),
+            (r"from\s+\w+_interface\s+import", "Importing non-existent Interface module."),
+        ]
+    },
 }
 
 
@@ -308,22 +404,29 @@ class CodeValidator:
         self.issues = []
         self.warnings = []
         
-        # Phase 1: Syntax Check
-        self._check_syntax(code)
-        if self._has_critical_issues():
-            return self._create_report(module_name, quality_score=0, verdict="REJECT")
+        # Determine if it's a Python module
+        is_python = self.module_type not in [ModuleType.FRONTEND_HTML, ModuleType.FRONTEND_CSS, ModuleType.FRONTEND_JS]
+
+        # Phase 1: Syntax Check (Python only)
+        if is_python:
+            self._check_syntax(code)
+            if self._has_critical_issues():
+                return self._create_report(module_name, quality_score=0, verdict="REJECT")
         
-        # Phase 2: Parse AST for deeper analysis
-        try:
-            tree = ast.parse(code)
-        except SyntaxError:
-            return self._create_report(module_name, quality_score=10, verdict="REJECT")
+        # Phase 2: Parse AST for deeper analysis (Python only)
+        tree = None
+        if is_python:
+            try:
+                tree = ast.parse(code)
+            except SyntaxError:
+                return self._create_report(module_name, quality_score=10, verdict="REJECT")
         
         # Phase 3: Module-specific rules
         self._check_module_type_rules(code)
         
-        # Phase 4: Universal rules
-        self._check_universal_rules(code, tree)
+        # Phase 4: Universal rules (Python only for now)
+        if is_python and tree:
+            self._check_universal_rules(code, tree)
         
         # Phase 5: Calculate score
         score = self._calculate_quality_score()
@@ -353,6 +456,45 @@ class CodeValidator:
             self._check_service_rules(code)
         elif self.module_type == ModuleType.UTILITY:
             self._check_utility_rules(code)
+        elif self.module_type in [ModuleType.FRONTEND_HTML, ModuleType.FRONTEND_CSS, ModuleType.FRONTEND_JS]:
+            self._check_frontend_rules(code)
+
+    def _check_frontend_rules(self, code: str):
+        """Validate frontend module rules."""
+        rules = {}
+        if self.module_type == ModuleType.FRONTEND_HTML:
+            rules = FRONTEND_HTML_RULES
+        elif self.module_type == ModuleType.FRONTEND_CSS:
+            rules = FRONTEND_CSS_RULES
+        elif self.module_type == ModuleType.FRONTEND_JS:
+            rules = FRONTEND_JS_RULES
+            
+        # Check MUST_HAVE
+        for pattern in rules.get("MUST_HAVE", []):
+            if pattern not in code:
+                self.issues.append(CodeIssue(
+                    type=IssueType.SYNTAX_ERROR,
+                    severity=Severity.HIGH,
+                    message=f"Missing required pattern: '{pattern}'",
+                ))
+                
+        # Check MUST_NOT_HAVE
+        for pattern in rules.get("MUST_NOT_HAVE", []):
+            if pattern in code:
+                self.issues.append(CodeIssue(
+                    type=IssueType.CODE_STYLE,
+                    severity=Severity.MEDIUM,
+                    message=f"Contains forbidden pattern: '{pattern}'",
+                ))
+
+        # Check FORBIDDEN_PATTERNS (regex)
+        for check in rules.get("FORBIDDEN_PATTERNS", []):
+            if re.search(check["pattern"], code):
+                self.issues.append(CodeIssue(
+                    type=IssueType.CODE_STYLE,
+                    severity=Severity.HIGH,
+                    message=check["message"],
+                ))
     
     def _check_web_interface_rules(self, code: str):
         """Validate web_interface module rules."""
@@ -472,6 +614,22 @@ class CodeValidator:
         
         # Check line length
         self._check_line_length(code)
+
+        # Check common pitfalls
+        self._check_common_pitfalls(code)
+    
+    def _check_common_pitfalls(self, code: str):
+        """Check for common Python pitfalls."""
+        pitfalls = UNIVERSAL_RULES["common_pitfalls"]["forbidden_patterns"]
+        
+        for pattern, message in pitfalls:
+            if re.search(pattern, code):
+                self.issues.append(CodeIssue(
+                    type=IssueType.LOGIC_ERROR,
+                    severity=Severity.HIGH,
+                    message=message,
+                    suggestion="Fix this Python specific error",
+                ))
     
     def _check_type_hints(self, tree: ast.AST):
         """Check for missing type hints."""
@@ -483,17 +641,19 @@ class CodeValidator:
                 
                 # Check return type
                 if node.returns is None:
-                    self.issues.append(CodeIssue(
-                        type=IssueType.TYPE_HINT_MISSING,
-                        severity=Severity.HIGH,
-                        line=node.lineno,
-                        message=f"Function '{node.name}' missing return type hint",
-                        suggestion=f"Add '-> ReturnType' after function signature",
-                    ))
+                    # Skip __init__ return type check
+                    if node.name != "__init__":
+                        self.issues.append(CodeIssue(
+                            type=IssueType.TYPE_HINT_MISSING,
+                            severity=Severity.HIGH,
+                            line=node.lineno,
+                            message=f"Function '{node.name}' missing return type hint",
+                            suggestion=f"Add '-> ReturnType' after function signature",
+                        ))
                 
                 # Check parameter types
                 for arg in node.args.args:
-                    if arg.annotation is None and arg.arg != "self":
+                    if arg.annotation is None and arg.arg not in ["self", "cls"]:
                         self.issues.append(CodeIssue(
                             type=IssueType.TYPE_HINT_MISSING,
                             severity=Severity.HIGH,
@@ -634,7 +794,15 @@ def get_validator(module_type: str, filename: str) -> CodeValidator:
     try:
         mtype = ModuleType(module_type)
     except ValueError:
-        mtype = ModuleType.SERVICE  # Default
+        # Fallback based on extension
+        if filename.endswith('.html'):
+            mtype = ModuleType.FRONTEND_HTML
+        elif filename.endswith('.css'):
+            mtype = ModuleType.FRONTEND_CSS
+        elif filename.endswith('.js'):
+            mtype = ModuleType.FRONTEND_JS
+        else:
+            mtype = ModuleType.SERVICE  # Default
     
     return CodeValidator(mtype, filename)
 

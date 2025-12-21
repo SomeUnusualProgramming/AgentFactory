@@ -1,0 +1,80 @@
+{
+  "general": [
+    "Follow PEP 8 naming conventions (snake_case for variables/functions, PascalCase for classes).",
+    "Use explicit type hints for all function arguments and return values.",
+    "Prefer immutable data structures where possible.",
+    "Keep functions small and focused (single responsibility).",
+    "Maximum line length is 100 characters.",
+    "Prefer explicit code over clever one-liners.",
+    "Avoid side effects in functions unless clearly documented."
+  ],
+
+  "documentation": [
+    "Docstrings are mandatory for all public classes, methods, and functions.",
+    "Use Google-style docstrings.",
+    "Docstrings must describe purpose, parameters, return values, and raised exceptions.",
+    "Keep comments meaningful; do not comment obvious code."
+  ],
+
+  "typing": [
+    "Use standard typing from `typing` and `collections.abc`.",
+    "Use Optional[T] only when None is a valid value.",
+    "Prefer Union types using | syntax (Python 3.10+).",
+    "Use TypedDict or dataclasses for structured data.",
+    "Avoid Any unless strictly necessary and documented."
+  ],
+
+  "security": [
+    "NEVER hardcode secrets; use environment variables or secret managers.",
+    "Avoid `eval()`, `exec()`, and deserialization of untrusted data.",
+    "Use `yaml.safe_load()` instead of `yaml.load()`.",
+    "Validate and sanitize all external input (API, CLI, files).",
+    "Do not expose internal stack traces to end users."
+  ],
+
+  "error_handling": [
+    "Catch only expected exceptions; avoid bare `except:` blocks.",
+    "Raise specific exception types (ValueError, TypeError, IOError, etc.).",
+    "Wrap external interactions (IO, DB, HTTP) in try-except blocks.",
+    "Use custom exceptions for domain-specific errors.",
+    "Never silently ignore exceptions."
+  ],
+
+  "logging": [
+    "Use the standard `logging` module; never use `print()` for logging.",
+    "Include contextual information in log messages.",
+    "Do not log sensitive data.",
+    "Use appropriate log levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)."
+  ],
+
+  "performance": [
+    "Prefer list/dict/set comprehensions where they improve readability.",
+    "Use generators or iterators for large datasets.",
+    "Avoid premature optimization; measure before optimizing.",
+    "Cache expensive computations when appropriate (e.g., lru_cache).",
+    "Avoid unnecessary object creation in hot paths."
+  ],
+
+  "architecture": [
+    "Avoid global mutable state.",
+    "Use dependency injection instead of hard-coded dependencies.",
+    "Separate business logic from IO and framework code.",
+    "Prefer composition over inheritance.",
+    "Keep modules cohesive and loosely coupled."
+  ],
+
+  "testing_and_quality": [
+    "Code must be unit-testable without external dependencies.",
+    "Prefer pytest-style tests.",
+    "Use fixtures for setup and teardown.",
+    "Write tests for edge cases and failure scenarios.",
+    "Avoid non-deterministic behavior in tests."
+  ],
+
+  "style_and_tools": [
+    "Format code using black.",
+    "Lint code using ruff or flake8.",
+    "Type-check using mypy or pyright.",
+    "Keep imports sorted and grouped."
+  ]
+}

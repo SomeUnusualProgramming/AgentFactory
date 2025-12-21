@@ -1,5 +1,5 @@
 import ollama
-from prompt_library import DEVELOPER_PROMPT_WITH_COMMENTS
+from utils.prompt_library import DEVELOPER_PROMPT_WITH_COMMENTS
 
 developer_prompt = DEVELOPER_PROMPT_WITH_COMMENTS
 

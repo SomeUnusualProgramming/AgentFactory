@@ -1,7 +1,7 @@
 import ollama
 import json
-from code_standards import CodeValidator, get_validator, format_report_for_display
-from prompt_library import REVIEWER_PROMPT
+from utils.code_standards import CodeValidator, get_validator, format_report_for_display
+from utils.prompt_library import REVIEWER_PROMPT
 
 def run_reviewer(code: str, module_name: str = "unknown", module_type: str = "service", filename: str = "unknown.py") -> dict:
     """
@@ -59,9 +59,16 @@ def run_reviewer(code: str, module_name: str = "unknown", module_type: str = "se
 3. SECURITY: No hardcoded secrets, proper error handling
 4. LOGIC: Any obvious bugs or inefficiencies?
 
+COMMON PITFALLS TO CHECK FOR:
+- `string.contains('x')` (Should be `'x' in string`)
+- `response.json()` used on RSS/XML feeds (Should use XML parser)
+- Importing non-existent "Interface" modules
+- Missing `__init__` arguments for dependency injection
+- Mutable default arguments `def f(x=[])`
+
 Module type rules:
 - web_interface: Flask routes, app instance, no business logic
-- service: Business logic, type hints, error handling, no Flask
+- service: Business logic, type hints, error handling, no Flask, explicit __init__ deps
 - utility: Pure functions, no state, no API/DB calls
 
 Code:

@@ -1,5 +1,5 @@
 import ollama
-from prompt_library import AUDITOR_PROMPT
+from utils.prompt_library import AUDITOR_PROMPT
 
 auditor_prompt = AUDITOR_PROMPT
 

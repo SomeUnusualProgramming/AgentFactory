@@ -1,5 +1,6 @@
 import ollama
 import time
+from agents import agent_analyst
 
 # --- CONFIGURATION ---
 MODEL = 'llama3.1'
@@ -35,6 +36,8 @@ def run_production_cycle(user_idea):
         # 2. AUDITOR PHASE
         print("[L2] Auditor is reviewing...")
         audit_report = call_ai(auditor_prompt, f"Review this YAML:\n{current_blueprint}")
+        
+        log_debug(f"ITERATION {iteration} - AUDITOR", audit_report)
 
         print(f"\n[AUDITOR REPORT]:\n{audit_report}")
 
@@ -50,8 +53,6 @@ def run_production_cycle(user_idea):
 
     if iteration > max_iterations:
         print("\n[TIMEOUT] Could not reach a perfect blueprint in 3 tries.")
-
-import agent_analyst
 
 if __name__ == "__main__":
     try:

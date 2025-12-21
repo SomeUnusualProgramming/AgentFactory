@@ -1,5 +1,5 @@
 import ollama
-from prompt_library import ARCHITECT_PROMPT_SOLID
+from utils.prompt_library import ARCHITECT_PROMPT_SOLID
 
 architect_prompt = ARCHITECT_PROMPT_SOLID
 

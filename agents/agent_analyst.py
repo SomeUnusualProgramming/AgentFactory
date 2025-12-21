@@ -1,6 +1,6 @@
 import ollama
 import time
-from prompt_library import ANALYST_INTERVIEW_PROMPT, ANALYST_PROMPT
+from utils.prompt_library import ANALYST_INTERVIEW_PROMPT, ANALYST_PROMPT
 
 CRITICAL_QUESTIONS = [
     "Main purpose of the product",
