@@ -424,23 +424,30 @@ RESPONSIBILITIES:
 Output ONLY valid YAML with "blackboard" as the top-level key.
 
 CRITICAL RULES:
-1. Output ONLY valid YAML syntax - no SQL, no code, no diagrams.
-2. Do NOT use Markdown code blocks.
-3. Do NOT include SQL CREATE TABLE statements, stored procedures, or database DDL.
-4. Each module MUST have these EXACT fields: name, filename, type, responsibility, requires.
-5. "requires" must be a list of filenames (e.g., ["user_service.py"]), NOT module names.
-6. AVOID CIRCULAR DEPENDENCIES: A->B and B->A is forbidden. Use a layered architecture.
+1. Start your response with a "REASONING" block explaining your architectural decisions.
+   Example:
+   REASONING:
+   I have chosen Flask because...
+   The module structure separates X from Y to avoid...
+   END REASONING
+
+2. Output valid YAML syntax - no SQL, no code, no diagrams.
+3. Do NOT use Markdown code blocks for the YAML part if possible, or use ```yaml.
+4. Do NOT include SQL CREATE TABLE statements, stored procedures, or database DDL.
+5. Each module MUST have these EXACT fields: name, filename, type, responsibility, requires.
+6. "requires" must be a list of filenames (e.g., ["user_service.py"]), NOT module names.
+7. AVOID CIRCULAR DEPENDENCIES: A->B and B->A is forbidden. Use a layered architecture.
    - CONTROLLERS (web_interface) depend on SERVICES.
    - SERVICES depend on REPOSITORIES/DATA or UTILITIES.
    - UTILITIES depend on NOTHING (or other UTILITIES).
    - VIEWS (web_interface) should NOT depend on other VIEWS.
-7. SPLIT RESPONSIBILITIES to avoid cycles:
+8. SPLIT RESPONSIBILITIES to avoid cycles:
    - If A needs B and B needs A, extract common logic to C.
    - If Controller needs View and View needs Controller -> Merge them or use a Router.
-8. NO PHANTOM DEPENDENCIES:
+9. NO PHANTOM DEPENDENCIES:
    - Every filename listed in "requires" MUST be defined as a module in this same YAML.
    - Do NOT list external libraries (like 'flask', 'json') in "requires". Only internal modules.
-9. SIMPLICITY RULE:
+10. SIMPLICITY RULE:
    - If in doubt, merge small modules. Fewer modules = fewer cycles.
    - Prefer a flat structure: Controller -> Service -> Utils.
    - Do NOT create "Repository" modules unless using a real database (SQLite/Postgres). For JSON/Memory, keep it in Service.
@@ -514,6 +521,15 @@ CHECK FOR ERRORS:
 8. Does the assembly section define a valid initialization order?
 
 OUTPUT FORMAT (STRICT):
+
+1. Start with a REASONING block:
+   REASONING:
+   I checked for circular dependencies...
+   I noticed that Module A depends on B...
+   END REASONING
+
+2. Then provide the VERDICT and details:
+
 If PASSED (Fully approved):
 VERDICT: PASSED
 
@@ -527,6 +543,11 @@ VERDICT: FAILED
 [Reason for failure]
 - Be specific. Example: "Missing 'assembly' section."
 - If circular dependency: "Circular dependency detected: A.py -> B.py -> A.py"
+- If separation of concerns violation: "Module X is doing Y which belongs to Module Z."
+
+CRITICAL: YOU MUST PROVIDE THE FULL CORRECTED YAML BLUEPRINT BELOW.
+DO NOT JUST COMPLAIN. FIX THE ARCHITECTURE YOURSELF.
+IF YOU CANNOT PROVIDE A FULL YAML, YOU MUST PROVIDE DETAILED, ACTIONABLE STEPS TO FIX IT.
 
 CORRECTED BLUEPRINT:
 ```yaml
@@ -610,7 +631,7 @@ DO NOT create Flask apps in service modules - the integrator (main.py) handles r
 """
 
 FACTORY_BOSS_L5_PROMPT = """You are a Lead System Integrator (Level 5).
-Your job is to write main.py that assembles all generated modules into a FULLY WORKING Flask APPLICATION.
+Your job is to write the `main.py` file that WIRES ALL MODULES TOGETHER into a FULLY FUNCTIONAL Flask application.
 
 ABSOLUTE RULES (NON-NEGOTIABLE):
 1. The Blackboard is a hard contract.
@@ -637,36 +658,45 @@ For Flask Web Apps, generate main.py that:
 - Initializes database if needed
 - Runs on port 5000 (or as defined in runtime section)
 
-FLASK ROUTING PATTERN:
+FLASK ROUTING PATTERN (YOU MUST FOLLOW THIS EXACT STRUCTURE):
 ```python
-from flask import Flask, jsonify, request
-# Import your modules
-from user_service import UserService
-from db_service import DatabaseService
+from flask import Flask, jsonify, request, render_template
+# Import your modules (Adjust names to match your actual files!)
+# Example: from user_service import UserService
+# Example: from db_service import DatabaseService
 
 app = Flask(__name__)
 
 # 1. INSTANTIATE SERVICES (Dependency Injection)
-# Create low-level dependencies first
-db_service = DatabaseService()
+# Create low-level dependencies first (like DB or Utils)
+# db_service = DatabaseService()
 # Pass them to dependent services
-user_service = UserService(db_service) 
+# user_service = UserService(db_service) 
 
 # 2. DEFINE ROUTES
 @app.route('/api/users', methods=['GET'])
 def get_users():
     try:
         # Use the INSTANCE, not the class
-        data = user_service.get_users()
-        return jsonify({"data": data, "error": None})
+        # data = user_service.get_users()
+        return jsonify({"data": [], "error": None})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route('/')
+def index():
+    return render_template('index.html')
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
 ```
 
-Output ONLY Python code enclosed in ```python ... ``` blocks. No other text.
+Output ONLY Python code enclosed in ```python ... ``` blocks.
+DO NOT OUTPUT A PLAN.
+DO NOT OUTPUT INSTRUCTIONS.
+DO NOT OUTPUT "Based on...".
+DO NOT OUTPUT "Here is the code...".
+ONLY OUTPUT THE PYTHON CODE.
 """
 
 # =================================================================
@@ -792,7 +822,12 @@ STRICT RULES:
 6. STRICTLY FOLLOW THE API SPECIFICATION for function signatures and class constructors.
    - Do NOT add arguments to `__init__` that are not in the Spec.
    - Do NOT change function names.
-7. SECURITY FIRST: ALWAYS use parameterized queries for SQL. NEVER concatenate user input. Validate all external inputs.
+7. **SECURITY IS PARAMOUNT**:
+   - **SQL INJECTION**: NEVER concatenate strings into SQL queries.
+     - WRONG: `cursor.execute(f"SELECT * FROM users WHERE id = {user_id}")`
+     - RIGHT: `cursor.execute("SELECT * FROM users WHERE id = ?", (user_id,))`
+   - **INPUT VALIDATION**: Validate all external inputs before use.
+   - **XSS**: Do not return raw HTML strings derived from user input.
 8. Avoid "Insecure Deserialization": Do NOT use `pickle` or `yaml.load` on untrusted data. Use `json` safely.
 
 OUTPUT:
@@ -831,9 +866,23 @@ You are a Maintenance Engineer.
 Your goal is to fix the Python code based on the provided Traceback and Project Files.
 
 STRICT FORMAT (CRITICAL):
-- First line MUST be exactly: "FILE: <filename>"
-- The rest MUST be the raw Python code in ```python ... ``` BLOCKS.
-- Do NOT include any explanations or conversational text.
+- You must output the filename and the full corrected code.
+- Format EXACTLY like this:
+
+FILE: <filename>
+```python
+<full corrected code>
+```
+
+EXAMPLE:
+FILE: main.py
+```python
+print("Hello World")
+```
+
+- Do NOT include any explanations.
+- Do NOT include conversational text.
+- ONLY OUTPUT THE "FILE:" LINE AND THE CODE BLOCK.
 """
 
 FACTORY_BOSS_L4_QUALITY_STANDARDS = r'''
