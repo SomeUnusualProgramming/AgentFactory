@@ -1,17 +1,25 @@
-import ollama
-from utils.prompt_library import DEVELOPER_PROMPT_WITH_COMMENTS
+import sys
+import os
 
-developer_prompt = DEVELOPER_PROMPT_WITH_COMMENTS
+# Add root to path if running directly
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from utils.prompt_library import DEVELOPER_PROMPT_WITH_COMMENTS
+from core.constants import AGENT_L4_DEVELOPER
+from core.llm_client import ask_agent
 
 def run_developer(specification):
-    print("--- AGENT: DEVELOPER (L4) is coding... ---")
+    print(f"--- AGENT: {AGENT_L4_DEVELOPER} is coding... ---")
 
-    response = ollama.chat(model='llama3.1', messages=[
-        {'role': 'system', 'content': developer_prompt},
-        {'role': 'user', 'content': f"Implement this specification:\n{specification}"},
-    ])
+    # Use ask_agent for consistent logging and cleaning
+    code = ask_agent(
+        AGENT_L4_DEVELOPER,
+        DEVELOPER_PROMPT_WITH_COMMENTS,
+        f"Implement this specification:\n{specification}",
+        format_type="python"
+    )
 
-    return response['message']['content']
+    return code
 
 if __name__ == "__main__":
     spec_from_architect = """
@@ -28,7 +36,6 @@ if __name__ == "__main__":
 
     filename = "database_handler.py"
     with open(filename, "w", encoding="utf-8") as f:
-        clean_code = code.replace("```python", "").replace("```", "").strip()
-        f.write(clean_code)
+        f.write(code)
 
     print(f">> Module saved to '{filename}'")

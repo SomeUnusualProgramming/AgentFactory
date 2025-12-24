@@ -89,6 +89,17 @@ The system follows a strict "Chain of Thought" workflow:
 5.  **Phase 5: Auto-Debug (L6 Debugger)**
     *   Runs the app, detects crashes, and autonomously fixes errors until the app runs successfully.
 
+### Orchestrators
+- **`factory_boss.py`**: The main controller. It manages the entire lifecycle, coordinates agents, handles state via `FactoryBlackboard`, and validates main.py quality.
+- **`supervisor.py`**: A simpler, high-level orchestrator that focuses on the initial planning phase.
+
+### Core Modules
+- **`config.py`**: Configuration constants and settings.
+- **`logger.py`**: Centralized logging and orchestration event tracking.
+- **`llm_client.py`**: Handles LLM interactions (Ollama) and response cleaning/parsing.
+- **`standards.py`**: Manages coding standards and validation rules.
+- **`factory_boss_blackboard.py`**: Defines the `FactoryBlackboard` class (Single Source of Truth).
+
 ## 📂 Output Structure
 
 All generated projects are saved in the `output/` directory:

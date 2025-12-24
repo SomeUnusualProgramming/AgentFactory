@@ -1,6 +1,13 @@
-import ollama
 import time
+import sys
+import os
+
+# Add root to path if running directly
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.prompt_library import ANALYST_INTERVIEW_PROMPT, ANALYST_PROMPT
+from core.constants import AGENT_L1_ANALYST, MODEL_NAME
+from core.llm_client import chat_with_agent, ask_agent
 
 CRITICAL_QUESTIONS = [
     "Main purpose of the product",
@@ -14,7 +21,7 @@ CRITICAL_QUESTIONS = [
 ]
 
 def interview_user():
-    print("--- AGENT: LEAD ANALYST (L1) ---")
+    print(f"--- AGENT: {AGENT_L1_ANALYST} ---")
     
     # 1. Select Mode
     print("Select Analysis Mode:")
@@ -36,8 +43,8 @@ def interview_user():
     gathered_context = ""
     
     while True:
-        response = ollama.chat(model='llama3.1', messages=messages)
-        content = response['message']['content']
+        # Use chat_with_agent for interactive session
+        content = chat_with_agent(AGENT_L1_ANALYST, messages)
         
         if "[[READY]]" in content:
             gathered_context = content.replace("[[READY]]", "").strip()
@@ -46,7 +53,7 @@ def interview_user():
             print("-"*40)
             break
             
-        print(f"\n[Analyst]: {content}")
+        print(f"\n[{AGENT_L1_ANALYST}]: {content}")
         answer = input("\n[You]: ")
         
         messages.append({'role': 'assistant', 'content': content})
@@ -61,22 +68,22 @@ def run_analyst():
     print(f"\n[System] Generating technical blueprint...\n")
     start_time = time.time()
 
-    final_messages = [
-        {'role': 'system', 'content': ANALYST_PROMPT},
-        {'role': 'user', 'content': f"Project Requirements:\n{gathered_context}\n\nGenerate the YAML blueprint."}
-    ]
-
-    response = ollama.chat(model='llama3.1', messages=final_messages)
-    result = response['message']['content']
-    clean_result = result.replace("```yaml", "").replace("```", "").strip()
+    # Use ask_agent for the final blueprint generation
+    # We pass the requirements as the user message
+    result = ask_agent(
+        AGENT_L1_ANALYST,
+        ANALYST_PROMPT,
+        f"Project Requirements:\n{gathered_context}\n\nGenerate the YAML blueprint.",
+        format_type="yaml" # Use 'yaml' to auto-clean
+    )
 
     print("-" * 20 + " ANALYSIS RESULT " + "-" * 20)
-    print(clean_result)
+    print(result)
     print("-" * 60)
 
     filename = "draft_plan.yaml"
     with open(filename, "w", encoding="utf-8") as f:
-        f.write(clean_result)
+        f.write(result)
 
     elapsed = time.time() - start_time
     print(f">> Blueprint saved to '{filename}' (Time: {elapsed:.2f}s)")
