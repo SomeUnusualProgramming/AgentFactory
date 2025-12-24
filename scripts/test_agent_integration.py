@@ -12,11 +12,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from factory_boss_blackboard import FactoryBlackboard
-from agent_architect import run_architect
-from agent_developer import run_developer
-from agent_code_reviewer import run_reviewer
-from agent_code_optimizer import run_optimizer
+from core.factory_boss_blackboard import FactoryBlackboard
+from agents.agent_architect import run_architect
+from agents.agent_developer import run_developer
+from agents.agent_code_reviewer import run_reviewer
+from agents.agent_code_optimizer import run_optimizer
 
 
 def test_blackboard():

@@ -34,6 +34,13 @@ Each agent is a specialized Python script wrapping an LLM prompt:
 - **`agent_code_optimizer.py`** (L4.75): Refactors code based on reviewer feedback, applying optimizations while preserving functionality.
 - **`agent_integrator.py`** (L5): Generates main.py entry point using **step-by-step algorithm** based on module types. For web apps: imports Flask app and calls `app.run()` (exactly 3 lines). For non-web: imports and calls service module.
 
+### Future Architecture (Experimental)
+- **`async_arch/`**: Contains the experimental implementation of an event-driven, asynchronous architecture.
+  - Uses `asyncio` and `Redis` for state management (`state_manager.py`).
+  - `orchestrator.py`: Async version of the factory boss.
+  - `hybrid_generator.py`: Uses templates for code generation.
+  - See `async_arch/migration_plan.md` for details on the planned migration.
+
 ## 3. Data Flow & Lifecycle
 
 1.  **Planning Phase (L1+L2)**:
@@ -141,10 +148,10 @@ These are all stored in `blackboard.json` for post-mortem analysis when generati
 - All generated modules use only Python standard library (no external pip dependencies required except Flask).
 
 ### Planning & Analysis
-- Run `python supervisor.py` for a simple planning loop with Analyst/Auditor feedback.
+- Run `python -m core.supervisor` for a simple planning loop with Analyst/Auditor feedback.
 
 ### Full Generation with Module Type System
-- Run `python factory_boss.py --idea "Your app idea here"` for the complete generation process.
+- Run `python -m core.factory_boss --idea "Your app idea here"` for the complete generation process.
   - This includes: Analyst → Auditor → Architect → Developer → CodeReviewer → CodeOptimizer → Integrator → AutoDebugger
   - Module type system is active throughout:
     - **Analyst** generates blueprint with module_type for each module
@@ -156,7 +163,7 @@ These are all stored in `blackboard.json` for post-mortem analysis when generati
 
 ### Debug Mode
 - Run with `--debug` flag to generate a detailed execution report:
-  `python factory_boss.py --idea "Your app idea" --debug`
+  `python -m core.factory_boss --idea "Your app idea" --debug`
 - Creates `debug_report.md` in the project directory containing:
   - Full prompt/response logs for every agent interaction
   - High-level project summary and execution map

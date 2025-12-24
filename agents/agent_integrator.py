@@ -1,5 +1,5 @@
 import ollama
-from prompt_library import INTEGRATOR_PROMPT
+from utils.prompt_library import INTEGRATOR_PROMPT
 
 integrator_prompt = INTEGRATOR_PROMPT
 
