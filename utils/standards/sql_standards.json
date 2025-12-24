@@ -1,0 +1,78 @@
+{
+  "general": [
+    "All database access must be explicit, predictable, and auditable.",
+    "Prefer ORM abstractions; use raw SQL only when ORM is insufficient.",
+    "Never construct SQL dynamically from user input.",
+    "Use transactions for any operation modifying more than one row or table.",
+    "Design queries for readability before micro-optimizations.",
+    "Always consider query performance and execution plans.",
+    "Use consistent naming conventions for tables and columns (snake_case)."
+  ],
+
+  "security": [
+    "CRITICAL: Prevent SQL Injection by using parameterized queries or ORM query builders only.",
+    "Never interpolate or concatenate user input into SQL strings.",
+    "Validate and sanitize all external input before passing it to queries.",
+    "Use least-privilege database roles (read-only vs read-write).",
+    "Avoid exposing raw database errors to the client.",
+    "Never log sensitive data (passwords, tokens, PII)."
+  ],
+
+  "transactions": [
+    "Wrap all write operations (INSERT, UPDATE, DELETE) in transactions.",
+    "Ensure atomicity: either all changes succeed or all are rolled back.",
+    "Rollback explicitly on exceptions.",
+    "Avoid long-running transactions.",
+    "Do not mix business logic and transaction management."
+  ],
+
+  "query_design": [
+    "Select only required columns; avoid SELECT *.",
+    "Use explicit JOIN syntax (INNER JOIN, LEFT JOIN).",
+    "Ensure indexes exist for columns used in WHERE, JOIN, ORDER BY, and GROUP BY.",
+    "Avoid N+1 queries; use eager loading when appropriate.",
+    "Limit result sets with LIMIT/OFFSET or pagination.",
+    "Use EXISTS instead of IN for large subqueries.",
+    "Prefer database-side filtering over application-side filtering."
+  ],
+
+  "flask_sqlalchemy": [
+    "Prefer ORM queries: Model.query.filter(), filter_by(), join().",
+    "Use relationships and eager loading (joinedload, selectinload) to avoid N+1 problems.",
+    "Use `db.session.execute(text(sql), params)` only when raw SQL is unavoidable.",
+    "Never execute raw SQL without bound parameters.",
+    "Commit transactions explicitly using `db.session.commit()`.",
+    "Always rollback the session on exceptions.",
+    "Close or remove sessions properly (especially in background jobs)."
+  ],
+
+  "raw_sql": [
+    "Raw SQL must be fully parameterized using named or positional parameters.",
+    "Avoid database-specific syntax unless justified.",
+    "Document why raw SQL is required instead of ORM.",
+    "Ensure raw SQL is covered by tests."
+  ],
+
+  "performance": [
+    "Analyze slow queries using EXPLAIN / EXPLAIN ANALYZE.",
+    "Avoid functions on indexed columns in WHERE clauses.",
+    "Batch inserts/updates when possible.",
+    "Cache expensive or frequently executed read queries when appropriate.",
+    "Avoid unnecessary DISTINCT and GROUP BY clauses."
+  ],
+
+  "migrations_and_schema": [
+    "Use migration tools (Alembic) for all schema changes.",
+    "Never modify production schemas manually.",
+    "Make migrations reversible.",
+    "Add indexes explicitly in migrations.",
+    "Avoid breaking schema changes without backward compatibility."
+  ],
+
+  "testing_and_quality": [
+    "Database logic must be testable and deterministic.",
+    "Use transactional tests with rollback.",
+    "Test edge cases (empty results, NULLs, large datasets).",
+    "Avoid hidden side effects in queries."
+  ]
+}

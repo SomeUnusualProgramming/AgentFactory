@@ -25,7 +25,7 @@ AgentFactory is an autonomous multi-agent software generation system powered by 
 Run the factory by providing a software idea directly via the command line:
 
 ```bash
-python factory_boss.py --idea "A personal finance tracker with a dashboard and CSV export"
+python -m core.factory_boss --idea "A personal finance tracker with a dashboard and CSV export"
 ```
 
 ### Interactive Mode
@@ -33,7 +33,7 @@ python factory_boss.py --idea "A personal finance tracker with a dashboard and C
 If you don't provide an idea, the **Analyst Agent** will interview you to gather requirements:
 
 ```bash
-python factory_boss.py
+python -m core.factory_boss
 ```
 
 ### 🐞 Debug Mode (New!)
@@ -41,8 +41,16 @@ python factory_boss.py
 Want to see exactly how the AI built your app? Enable debug mode to generate a comprehensive execution report:
 
 ```bash
-python factory_boss.py --idea "Simple ToDo App" --debug
+python -m core.factory_boss --idea "Simple ToDo App" --debug
 ```
+
+### Helper Scripts
+
+You can also use the provided batch files for quick starts:
+- `start.bat`: Runs a complex news dashboard example.
+- `startEZ.bat`: Runs a simpler news feed example.
+
+These scripts are great examples of how to pass detailed prompts to the factory.
 
 This will create a `debug_report.md` file in your project folder containing:
 -   **High-Level Summary**: Project status and created modules.
@@ -81,6 +89,17 @@ The system follows a strict "Chain of Thought" workflow:
 5.  **Phase 5: Auto-Debug (L6 Debugger)**
     *   Runs the app, detects crashes, and autonomously fixes errors until the app runs successfully.
 
+### Orchestrators
+- **`factory_boss.py`**: The main controller. It manages the entire lifecycle, coordinates agents, handles state via `FactoryBlackboard`, and validates main.py quality.
+- **`supervisor.py`**: A simpler, high-level orchestrator that focuses on the initial planning phase.
+
+### Core Modules
+- **`config.py`**: Configuration constants and settings.
+- **`logger.py`**: Centralized logging and orchestration event tracking.
+- **`llm_client.py`**: Handles LLM interactions (Ollama) and response cleaning/parsing.
+- **`standards.py`**: Manages coding standards and validation rules.
+- **`factory_boss_blackboard.py`**: Defines the `FactoryBlackboard` class (Single Source of Truth).
+
 ## 📂 Output Structure
 
 All generated projects are saved in the `output/` directory:
@@ -95,6 +114,15 @@ output/
       ├── static/              # CSS/JS files (for web apps)
       └── [module_name].py    # Generated modules
 ```
+
+## 🧰 Utility Scripts
+
+The `scripts/` directory contains tools to help you test and verify the generated code:
+
+-   `verify_code_quality.py`: Checks syntax and basic code quality of a file.
+-   `test_agent_integration.py`: Runs integration tests for the agents.
+-   `compare_outputs.py`: Compares two generated projects to see improvements.
+-   `generate_sample_artifacts.py`: Creates sample data for testing.
 
 ## 📝 License
 
