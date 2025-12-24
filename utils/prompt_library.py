@@ -298,6 +298,9 @@ def get_articles():
 # 5. Frontend Route
 @app.route('/')
 def index():
+    # Prepare initial data for the dashboard
+    # dashboard_data = article_service.get_dashboard_stats()
+    # return render_template('index.html', data=dashboard_data)
     return render_template('index.html')
 
 # 6. Entry Point
@@ -444,7 +447,10 @@ CRITICAL RULES:
 8. SPLIT RESPONSIBILITIES to avoid cycles:
    - If A needs B and B needs A, extract common logic to C.
    - If Controller needs View and View needs Controller -> Merge them or use a Router.
-9. NO PHANTOM DEPENDENCIES:
+9. WEB APPS REQUIRE FRONTEND:
+   - If building a web app, you MUST define at least one module with type "web_interface".
+   - This module will be responsible for rendering templates (Flask) or serving API (FastAPI).
+10. NO PHANTOM DEPENDENCIES:
    - Every filename listed in "requires" MUST be defined as a module in this same YAML.
    - Do NOT list external libraries (like 'flask', 'json') in "requires". Only internal modules.
 10. SIMPLICITY RULE:
@@ -469,7 +475,11 @@ blackboard:
       - name: "index"
         route: "/"
         description: "Main landing page with hero section"
-        elements: ["Navbar", "Hero Header", "Footer"]
+        elements: ["Navbar", "Hero Header", "Footer", "Feature Grid"]
+      - name: "dashboard"
+        route: "/dashboard"
+        description: "User dashboard with data visualization"
+        elements: ["Sidebar", "Data Table", "Chart Area"]
   data_strategy:
     type: "sqlite" # or "json_file", "in_memory" - MUST be explicit
     details: "Use SQLAlchemy with SQLite for persistence"
@@ -685,6 +695,9 @@ def get_users():
 
 @app.route('/')
 def index():
+    # Prepare initial data for the dashboard
+    # dashboard_data = article_service.get_dashboard_stats()
+    # return render_template('index.html', data=dashboard_data)
     return render_template('index.html')
 
 if __name__ == '__main__':
@@ -709,16 +722,25 @@ Your goal is to analyze the System Blueprint and generate a strict `requirements
 RESPONSIBILITIES:
 1. Analyze the 'modules' and 'data_strategy' sections of the blueprint.
 2. Identify ALL required third-party libraries (e.g., 'flask', 'sqlalchemy', 'pandas', 'requests').
-3. Resolve version conflicts (prefer stable, compatible versions).
-4. EXCLUDE standard library modules (e.g., 'os', 'json', 'math').
-5. EXCLUDE internal module names (e.g., 'user_service.py').
-6. PLATFORM WARNING: The environment is Windows. Avoid libraries requiring C compilation (pandas, numpy, scipy) unless absolutely critical. Prefer pure-Python alternatives.
+3. Resolve version conflicts:
+   - **FLASK EXTENSIONS**: If using `flask-sqlalchemy`, `flask-login`, etc., you MUST use `flask>=2.3.0` (or leave flask version unpinned to let pip resolve it).
+   - **WERKZEUG COMPATIBILITY**: `Flask` 2.x and `Werkzeug` 3.x have breaking changes.
+     - If using `flask>=2.3.0`, you usually don't need to pin `werkzeug`.
+     - BUT if using older Flask, you MUST pin `Werkzeug<3.0.0`.
+     - SAFEST BET: Use `flask>=3.0.0` and let it resolve `werkzeug`.
+4. EXCLUDE standard library modules (e.g., 'os', 'json', 'math', 'logging', 'unittest').
+5. EXCLUDE sub-modules or functions of packages (e.g., 'jsonify', 'request', 'render_template' are part of 'flask', NOT separate packages).
+   - **CRITICAL**: DO NOT include 'jsonify' in requirements.txt. It is part of Flask.
+   - **CRITICAL**: DO NOT include 'werkzeug' unless you have a specific version constraint. Flask installs it automatically.
+6. EXCLUDE internal module names (e.g., 'user_service.py').
+7. PLATFORM WARNING: The environment is Windows. Avoid libraries requiring C compilation (pandas, numpy, scipy) unless absolutely critical. Prefer pure-Python alternatives.
 
 OUTPUT FORMAT:
 - Output ONLY the content of `requirements.txt`.
-- One library per line with version specifiers (e.g., `flask>=2.0.0`).
-- NO markdown, NO explanations.
+- One library per line with version specifiers (e.g., `flask>=3.0.0`).
+- NO markdown, NO explanations, NO comments, NO extra text.
 - DO NOT include the filename "requirements.txt" in the output.
+- DO NOT output lines like "I excluded standard library modules...".
 """
 
 TEST_ENGINEER_PROMPT = """You are the TEST ENGINEER AGENT (TDD Red Phase).
@@ -738,27 +760,27 @@ STRICT RULES:
    - Example: if filename is "utils.py", import as `from utils import Utils`.
 4. Write tests that assert the expected behavior defined in the Spec.
 5. Cover success cases, edge cases, and error handling.
-6. **CRITICAL: MOCK ALL EXTERNAL DEPENDENCIES**
-   - The environment is being built in parallel. Other modules (like 'api_utils', 'models', 'database') MAY NOT EXIST YET.
+6. **CRITICAL: MOCK ALL INTERNAL DEPENDENCIES**
+   - The environment is being built in parallel. Other modules (like 'api_utils', 'models', 'database', 'utils') MAY NOT EXIST YET.
    - You MUST mock them to prevent `ModuleNotFoundError`.
-   - Use `unittest.mock.patch` or `sys.modules` to mock missing imports if necessary.
-   - If the module under test imports `from api_utils import config`, you must ensure `api_utils` is mocked BEFORE the import happens (if possible) or structure the test to handle it.
-   - **BETTER APPROACH**: Trust that the module under test *will* import them, but for the TEST, use `unittest.mock.MagicMock` for any dependencies passed into the constructor.
-   - If the module has global imports that might fail, consider using `unittest.mock.patch.dict(sys.modules, {'api_utils': MagicMock()})` in a fixture or `conftest`.
+   - Use `sys.modules` to mock missing imports BEFORE importing the module under test.
+   - Example: `sys.modules['utils'] = MagicMock()`
+   - **MOCK FILE I/O**: If the module reads files (e.g. JSON), use `mock_open` or patch `builtins.open`. NEVER assume a file exists.
 7. DO NOT implement the actual logic. The tests MUST fail if the logic is missing (which it is).
-8. Output ONLY the Python code for `test_<module_name>.py`.
+8. **DO NOT OUTPUT CONFIGURATION**: Do not include `[pytest]` blocks or `pytest.ini` content. Output Python code ONLY.
 
 TEMPLATE:
 ```python
 import pytest
 import sys
-from unittest.mock import Mock, MagicMock, patch
+from unittest.mock import Mock, MagicMock, patch, mock_open
 
 # CRITICAL: Mock external modules that might not exist yet to prevent ImportErrors
 # This must be done BEFORE importing the module under test if it has top-level imports
 sys.modules['api_utils'] = MagicMock()
 sys.modules['models'] = MagicMock()
 sys.modules['database_service'] = MagicMock()
+sys.modules['utils'] = MagicMock() # Mock utils if used
 
 # Now import the module under test
 from <module_name> import <ClassName>
@@ -774,6 +796,12 @@ def test_success_scenario():
     # Assertion
     assert result == "expected_value"
     mock_dep.some_call.assert_called_once()
+
+def test_file_reading():
+    with patch("builtins.open", mock_open(read_data='{"key": "value"}')):
+        service = <ClassName>()
+        data = service.load_data()
+        assert data == {"key": "value"}
 ```
 """
 
@@ -802,6 +830,26 @@ OUTPUT FORMAT (JSON):
 }
 
 If status is SECURE, the vulnerabilities list should be empty.
+"""
+
+SECURITY_FIX_PROMPT = """You are a Secure Code Specialist.
+Your goal is to fix security vulnerabilities in the provided Python code.
+
+INPUT:
+1. Current Code (Vulnerable)
+2. Security Vulnerability Report (JSON)
+3. Tests that must still pass
+
+STRICT RULES:
+1. Fix ALL vulnerabilities listed in the report.
+2. Do NOT break existing functionality (Tests must pass).
+3. Do NOT add new external dependencies unless absolutely necessary.
+4. Output the FULL corrected code.
+5. Add comments explaining the security fix: `# SECURITY FIX: ...`
+
+OUTPUT:
+- Output ONLY the Python code for the module.
+- Enclose in ```python ... ``` block.
 """
 
 # Update Developer Prompt to emphasize passing tests
@@ -933,7 +981,7 @@ MUST HAVE:
   ✓ Public functions or classes with single responsibility
   ✓ Type hints on ALL function signatures: def func(param: Type) -> ReturnType
   ✓ try-except blocks for ALL external operations (API calls, DB, file I/O)
-  ✓ logging.basicConfig() and logger usage for important operations
+  ✓ logging.basicConfig() and logger usage for important operations (use logger.error, logger.warning, logger.info)
   ✓ Docstrings explaining what the function/class does and why
   ✓ Handle missing data files gracefully (if file missing, create default or return empty)
 
@@ -945,6 +993,7 @@ MUST NOT HAVE:
   ✗ Flask/FastAPI imports or initialization
   ✗ Direct HTML file writes (use temp files only)
   ✗ Imports of "Interface" modules that don't exist
+  ✗ Non-existent logger methods (e.g., logger.log_warning does NOT exist; use logger.warning)
 
 PATTERN (REQUIRED):
 ```python
@@ -1119,19 +1168,25 @@ Generate production-ready Python code for this file."""
 def get_frontend_developer_prompt(app_idea: str, api_spec: str, ui_design: str = "") -> str:
     """Get frontend developer prompt with context filled in"""
     frontend_prompt = """You are a SENIOR FRONTEND DEVELOPER (Level 4.5).
-Your job is to generate professional HTML, CSS, and JavaScript for a web application.
+Your job is to generate professional, modern, and fully functional HTML, CSS, and JavaScript for a web application.
+
+OBJECTIVE:
+Create a polished User Interface that looks like a finished product, not a prototype.
+Users should be impressed by the design and interactivity.
 
 RULES FOR HTML:
-1. Create semantic, accessible HTML5
-2. Use Bootstrap 5 CDN for responsive design
-3. Include proper form validation and error handling
+1. Create semantic, accessible HTML5.
+2. Use Bootstrap 5 CDN for responsive design and components (Cards, Modals, Navbars).
+3. Include proper form validation (required, type="email", etc.) and error handling displays.
 4. Create containers with IDs for dynamic content: id="news-feed", id="sources-list", etc.
+5. Use FontAwesome (CDN) for icons to enhance visual appeal.
 
 RULES FOR CSS:
-1. Use modern CSS3 with flexbox/grid
-2. Include responsive design with media queries
-3. Add loading states and error state styling
-4. Use clear color scheme and typography
+1. Use modern CSS3 with flexbox/grid for layout.
+2. Include responsive design with media queries (mobile-first).
+3. Add polished styling: shadows, rounded corners, transitions on hover.
+4. Define a professional color palette (e.g., primary brand color, neutral backgrounds).
+5. Add specific styles for loading states (spinners) and error toasts.
 
 RULES FOR JAVASCRIPT (CRITICAL - ASYNC/AWAIT REQUIRED):
 1. Use Vanilla JS with modern async/await syntax
@@ -1166,9 +1221,20 @@ document.addEventListener('DOMContentLoaded', initApp);
 
 OUTPUT FORMAT:
 Generate THREE separate files with clear markers:
-1. <!-- HTML FILE: templates/index.html --> ... HTML CODE ... <!-- END HTML -->
-2. /* CSS FILE: static/style.css */ ... CSS CODE ... /* END CSS */
-3. // JS FILE: static/app.js ... JS CODE ... // END JS
+
+HTML FILE: templates/index.html
+... HTML CODE ...
+
+CSS FILE: static/style.css
+... CSS CODE ...
+
+JS FILE: static/app.js
+... JS CODE ...
+
+CRITICAL:
+- Do NOT output code blocks with ```html or ```css or ```js
+- Just raw text with the markers above
+- Do NOT put conversational text like "Here are the files"
 """
     return f"""{frontend_prompt}
 
@@ -1188,4 +1254,7 @@ CRITICAL REMINDERS:
 - All async calls MUST use await
 - Initialize everything after DOM is ready
 - Return consistent JSON from all API endpoints
-- Include error handling and user feedback"""
+- Include error handling and user feedback
+- DO NOT use code blocks (```) to wrap the entire response, only wrap the code content if needed.
+- DO NOT include conversational text between files.
+"""
